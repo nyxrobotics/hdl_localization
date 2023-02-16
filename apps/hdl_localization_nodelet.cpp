@@ -163,14 +163,16 @@ private:
     // initialize pose estimator
     if (private_nh.param<bool>("specify_init_pose", true)) {
       NODELET_INFO("initialize pose estimator with specified parameters!!");
-      pose_estimator.reset(new hdl_localization::PoseEstimator(registration,
+      pose_estimator.reset(new hdl_localization::PoseEstimator(
+        registration,
         Eigen::Vector3f(private_nh.param<double>("init_pos_x", 0.0), private_nh.param<double>("init_pos_y", 0.0), private_nh.param<double>("init_pos_z", 0.0)),
         Eigen::Quaternionf(
           private_nh.param<double>("init_ori_w", 1.0),
           private_nh.param<double>("init_ori_x", 0.0),
           private_nh.param<double>("init_ori_y", 0.0),
           private_nh.param<double>("init_ori_z", 0.0)),
-        private_nh.param<double>("cool_time_duration", 0.5)));
+        private_nh.param<double>("cool_time_duration", 0.5),
+        private_nh.param<double>("score_threshold", 20.0)));
     }
   }
 
@@ -189,7 +191,7 @@ private:
    * @param points_msg
    */
   void points_callback(const sensor_msgs::PointCloud2ConstPtr& points_msg) {
-    if(!globalmap) {
+    if (!globalmap) {
       NODELET_ERROR("globalmap has not been received!!");
       return;
     }
@@ -229,7 +231,7 @@ private:
     }
 
     std::lock_guard<std::mutex> estimator_lock(pose_estimator_mutex);
-    if(!pose_estimator) {
+    if (!pose_estimator) {
       NODELET_ERROR("waiting for initial pose input!!");
       return;
     }
@@ -372,7 +374,8 @@ private:
       registration,
       pose.translation(),
       Eigen::Quaternionf(pose.linear()),
-      private_nh.param<double>("cool_time_duration", 0.5)));
+      private_nh.param<double>("cool_time_duration", 0.5),
+      private_nh.param<double>("score_threshold", 20.0)));
 
     relocalizing = false;
 
@@ -388,13 +391,12 @@ private:
     std::lock_guard<std::mutex> lock(pose_estimator_mutex);
     const auto& p = pose_msg->pose.pose.position;
     const auto& q = pose_msg->pose.pose.orientation;
-    pose_estimator.reset(
-          new hdl_localization::PoseEstimator(
-            registration,
-            Eigen::Vector3f(p.x, p.y, p.z),
-            Eigen::Quaternionf(q.w, q.x, q.y, q.z),
-            private_nh.param<double>("cool_time_duration", 0.5))
-    );
+    pose_estimator.reset(new hdl_localization::PoseEstimator(
+      registration,
+      Eigen::Vector3f(p.x, p.y, p.z),
+      Eigen::Quaternionf(q.w, q.x, q.y, q.z),
+      private_nh.param<double>("cool_time_duration", 0.5),
+      private_nh.param<double>("score_threshold", 20.0)));
   }
 
   /**
@@ -501,7 +503,7 @@ private:
       num_valid_points++;
 
       registration->getSearchMethodTarget()->nearestKSearch(pt, 1, k_indices, k_sq_dists);
-      if(k_sq_dists[0] < max_correspondence_dist * max_correspondence_dist) {
+      if (k_sq_dists[0] < max_correspondence_dist * max_correspondence_dist) {
         status.matching_error += k_sq_dists[0];
         num_inliers++;
       }

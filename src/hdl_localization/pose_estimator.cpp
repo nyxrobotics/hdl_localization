@@ -12,9 +12,17 @@ namespace hdl_localization {
  * @param pos                 initial position
  * @param quat                initial orientation
  * @param cool_time_duration  during "cool time", prediction is not performed
+ * @param score_threshold     Do not process localization when scan matching fitness score is low
  */
-PoseEstimator::PoseEstimator(pcl::Registration<PointT, PointT>::Ptr& registration, const Eigen::Vector3f& pos, const Eigen::Quaternionf& quat, double cool_time_duration)
-    : registration(registration), cool_time_duration(cool_time_duration) {
+PoseEstimator::PoseEstimator(
+  pcl::Registration<PointT, PointT>::Ptr& registration,
+  const Eigen::Vector3f& pos,
+  const Eigen::Quaternionf& quat,
+  double cool_time_duration,
+  double score_threshold)
+: registration(registration),
+  cool_time_duration(cool_time_duration),
+  score_threshold(score_threshold) {
   last_observation = Eigen::Matrix4f::Identity();
   last_observation.block<3, 3>(0, 0) = quat.toRotationMatrix();
   last_observation.block<3, 1>(0, 3) = pos;
@@ -138,6 +146,9 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   registration->setInputSource(cloud);
   registration->align(*aligned, init_guess);
   fitness_score = registration->getFitnessScore();
+  if (fitness_score > score_threshold) {
+    return aligned;
+  }
 
   Eigen::Matrix4f trans = registration->getFinalTransformation();
   Eigen::Vector3f p = trans.block<3, 1>(0, 3);
@@ -195,4 +206,4 @@ const boost::optional<Eigen::Matrix4f>& PoseEstimator::imu_prediction_error() co
 const boost::optional<Eigen::Matrix4f>& PoseEstimator::odom_prediction_error() const {
   return odom_pred_error;
 }
-}
+}  // namespace hdl_localization

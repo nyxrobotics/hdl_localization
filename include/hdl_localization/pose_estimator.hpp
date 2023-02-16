@@ -10,10 +10,11 @@
 #include <pcl/registration/registration.h>
 
 namespace kkl {
-  namespace alg {
-template<typename T, class System> class UnscentedKalmanFilterX;
-  }
+namespace alg {
+template <typename T, class System>
+class UnscentedKalmanFilterX;
 }
+}  // namespace kkl
 
 namespace hdl_localization {
 
@@ -33,8 +34,14 @@ public:
    * @param pos                 initial position
    * @param quat                initial orientation
    * @param cool_time_duration  during "cool time", prediction is not performed
+   * @param score_threshold     Do not process localization when scan matching fitness score is low
    */
-  PoseEstimator(pcl::Registration<PointT, PointT>::Ptr& registration, const Eigen::Vector3f& pos, const Eigen::Quaternionf& quat, double cool_time_duration = 1.0);
+  PoseEstimator(
+    pcl::Registration<PointT, PointT>::Ptr& registration,
+    const Eigen::Vector3f& pos,
+    const Eigen::Quaternionf& quat,
+    double cool_time_duration = 1.0,
+    double score_threshold = 100.0);
   ~PoseEstimator();
 
   /**
@@ -82,7 +89,8 @@ private:
   ros::Time init_stamp;             // when the estimator was initialized
   ros::Time prev_stamp;             // when the estimator was updated last time
   ros::Time last_correction_stamp;  // when the estimator performed the correction step
-  double cool_time_duration;        //
+  double cool_time_duration;        // during "cool time", prediction is not performed
+  double score_threshold;           // Do not process localization when scan matching fitness score is low
 
   Eigen::MatrixXf process_noise, odom_process_noise;
   std::unique_ptr<kkl::alg::UnscentedKalmanFilterX<float, PoseSystem>> ukf;
@@ -93,7 +101,7 @@ private:
   boost::optional<Eigen::Matrix4f> odom_pred_error;
 
   pcl::Registration<PointT, PointT>::Ptr registration;
-  };
+};
 
 }  // namespace hdl_localization
 
