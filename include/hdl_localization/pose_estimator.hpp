@@ -92,7 +92,8 @@ private:
   double cool_time_duration;        // during "cool time", prediction is not performed
   double score_threshold;           // Do not process localization when scan matching fitness score is low
 
-  Eigen::MatrixXf process_noise, odom_process_noise;
+  Eigen::MatrixXf process_noise;
+  Eigen::MatrixXf odom_process_noise, imu_process_noise;
   std::unique_ptr<kkl::alg::UnscentedKalmanFilterX<float, PoseSystem>> ukf;
 
   Eigen::Matrix4f last_observation;
