@@ -89,7 +89,6 @@ public:
       cov_pred += weights[i] * diff * diff.transpose();
     }
     cov_pred += R;
-
     mean = mean_pred;
     cov = cov_pred;
   }
@@ -124,7 +123,6 @@ public:
       cov_pred += weights[i] * diff * diff.transpose();
     }
     cov_pred += R;
-
     mean = mean_pred;
     cov = cov_pred;
   }

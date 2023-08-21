@@ -28,15 +28,16 @@ PoseEstimator::PoseEstimator(
   last_observation.block<3, 1>(0, 3) = pos;
 
   process_noise = Eigen::MatrixXf::Identity(16, 16);
-  process_noise.middleRows(0, 3) *= 1.0;
-  process_noise.middleRows(3, 3) *= 1.0;
-  process_noise.middleRows(6, 4) *= 0.5;
-  process_noise.middleRows(10, 3) *= 1e-6;
-  process_noise.middleRows(13, 3) *= 1e-6;
+  process_noise.middleRows(0, 3) *= 1.0;    // Position
+  process_noise.middleRows(3, 3) *= 1.0;    // Velocity
+  process_noise.middleRows(6, 4) *= 0.5;    // Orientation
+  process_noise.middleRows(10, 3) *= 1e-6;  // Acceleration
+  process_noise.middleRows(13, 3) *= 1e-6;  // Angular velocity
 
+  // Scan matching measurement covariance
   Eigen::MatrixXf measurement_noise = Eigen::MatrixXf::Identity(7, 7);
-  measurement_noise.middleRows(0, 3) *= 0.01;
-  measurement_noise.middleRows(3, 4) *= 0.001;
+  measurement_noise.middleRows(0, 3) *= 0.01;   // Position
+  measurement_noise.middleRows(3, 4) *= 0.001;  // Orientation
 
   Eigen::VectorXf mean(16);
   mean.middleRows(0, 3) = pos;
@@ -45,14 +46,24 @@ PoseEstimator::PoseEstimator(
   mean.middleRows(10, 3).setZero();
   mean.middleRows(13, 3).setZero();
 
-  Eigen::MatrixXf cov = Eigen::MatrixXf::Identity(16, 16) * 0.01;
-
-  PoseSystem system;
-  ukf.reset(new kkl::alg::UnscentedKalmanFilterX<float, PoseSystem>(system, 16, 6, 7, process_noise, measurement_noise, mean, cov));
   // TODO: Change odom covariance constants to ROS params
   // or subscribe an odometry topic and use it's covariance
-  odom_process_noise = Eigen::MatrixXf::Identity(16, 16) * 1e-5;
-  odom_process_noise.middleRows(6, 4) *= 1e-2;
+  // Odometry linear velocity covariance
+  odom_process_noise = Eigen::MatrixXf::Identity(16, 16);
+  odom_process_noise.middleRows(0, 3) *= 1e-3;    // Position
+  odom_process_noise.middleRows(3, 3) *= 1e-9;    // Velocity
+  odom_process_noise.middleRows(6, 4) *= 1e-6;    // Orientation
+  odom_process_noise.middleRows(13, 3) *= 1e-12;  // Angular velocity
+
+  // IMU angular velocity covariance
+  imu_process_noise = Eigen::MatrixXf::Identity(16, 16);
+  imu_process_noise.middleRows(6, 4) *= 0.5;    // Orientation
+  imu_process_noise.middleRows(10, 3) *= 1e-6;  // Acceleration
+  imu_process_noise.middleRows(13, 3) *= 1e-6;  // Angular velocity
+
+  Eigen::MatrixXf cov = Eigen::MatrixXf::Identity(16, 16) * 0.01;
+  PoseSystem system;
+  ukf.reset(new kkl::alg::UnscentedKalmanFilterX<float, PoseSystem>(system, 16, 7, process_noise, measurement_noise, mean, cov));
 }
 
 PoseEstimator::~PoseEstimator() {}
@@ -78,7 +89,6 @@ void PoseEstimator::predict(const ros::Time& stamp) {
 
   ukf->setProcessNoiseCov(process_noise * dt);
   ukf->system.dt = dt;
-
   ukf->predict();
 }
 
@@ -100,8 +110,7 @@ void PoseEstimator::predict_imu(const ros::Time& stamp, const Eigen::Vector3f& i
 
   double dt = (stamp - prev_stamp).toSec();
   prev_stamp = stamp;
-
-  ukf->setProcessNoiseCov(process_noise * dt);
+  ukf->setProcessNoiseCov(imu_process_noise * dt);
   ukf->system.dt = dt;
   ukf->predict_imu(imu_acc, imu_gyro);
 }
@@ -120,10 +129,8 @@ void PoseEstimator::predict_odom(const ros::Time& stamp, const Eigen::Vector3f& 
 
   double dt = (stamp - prev_stamp).toSec();
   prev_stamp = stamp;
-
   ukf->setProcessNoiseCov(odom_process_noise * dt);
   ukf->system.dt = dt;
-
   ukf->predict_odom(odom_twist_linear, odom_twist_angular);
 }
 
@@ -144,30 +151,87 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
 
   pcl::PointCloud<PointT>::Ptr aligned(new pcl::PointCloud<PointT>());
   registration->setInputSource(cloud);
+  // double score_init = registration->getFitnessScore();
   registration->align(*aligned, init_guess);
-  fitness_score = registration->getFitnessScore();
+  double score_in = registration->getFitnessScore();
+  // Get fitness score between aligned point and map
+  // registration->setInputSource(aligned);
+  // double score_out = registration->getFitnessScore();
+  fitness_score = score_in;
+  // ROS_WARN("fitness_score: %f -> %f ->", score_init, score_in, score_out);
+  ROS_WARN("fitness_score: %f", fitness_score);
   if (fitness_score > score_threshold) {
     return aligned;
   }
 
   Eigen::Matrix4f trans = registration->getFinalTransformation();
-  Eigen::Vector3f p = trans.block<3, 1>(0, 3);
-  Eigen::Quaternionf q(trans.block<3, 3>(0, 0));
+  Eigen::Vector3f p_measure = trans.block<3, 1>(0, 3);
+  Eigen::Quaternionf q_measure(trans.block<3, 3>(0, 0));
 
-  if (quat().coeffs().dot(q.coeffs()) < 0.0f) {
-    q.coeffs() *= -1.0f;
+  if (quat().coeffs().dot(q_measure.coeffs()) < 0.0f) {
+    q_measure.coeffs() *= -1.0f;
   }
 
+  // Get current estimation pose
+  Eigen::Vector3f p_estimate = ukf->mean.head<3>();
+  Eigen::Quaternionf q_estimate(ukf->mean[6], ukf->mean[7], ukf->mean[8], ukf->mean[9]);
+  // Get difference between predicted and measured
+  Eigen::Vector3f p_diff = p_measure - p_estimate;
+  double diff_linear_norm = (p_measure - p_estimate).norm();
+  double diff_angular_norm = fabs(q_estimate.angularDistance(q_measure));
+  // Devide difference by fitness_score
+  double p_diff_scaling = 1.0;
+  double q_diff_scaling = 0.001;
+  if (diff_linear_norm > 1.0) {
+    p_diff_scaling /= diff_linear_norm;
+  }
+  if (diff_angular_norm > 1.0) {
+    q_diff_scaling /= diff_angular_norm;
+  }
+  // Add difference to current estimation
+  p_measure = p_estimate + p_diff_scaling * p_diff / (1.0 + 1.0 * fitness_score);
+  q_measure = q_estimate.slerp(q_diff_scaling / (1.0 + 1000.0 * fitness_score), q_measure);
+  // Update kalman filter
   Eigen::VectorXf observation(7);
-  observation.middleRows(0, 3) = p;
-  observation.middleRows(3, 4) = Eigen::Vector4f(q.w(), q.x(), q.y(), q.z());
+  observation.middleRows(0, 3) = p_measure;
+  observation.middleRows(3, 4) = Eigen::Vector4f(q_measure.w(), q_measure.x(), q_measure.y(), q_measure.z());
   last_observation = trans;
+  // Get size
+  // Eigen::Matrix3f covariance_matrix;
+  // Eigen::Vector4f centroid;
+  // pcl::compute3DCentroid(*aligned, centroid);
+  // ROS_WARN("position: [%f, %f, %f]", p[0], p[1], p[2]);
+  // ROS_WARN("centroid: [%f, %f, %f]", centroid(0), centroid(1), centroid(2));
+  // Eigen::Vector3f p_centroid = centroid.head<3>();
+  // double centroid_distance = (p_centroid - p).norm();
+  // ROS_WARN("centroid_distance: %f", centroid_distance);
+  // int points_num = aligned->points.size();
+  // computeCovarianceMatrix(*aligned, centroid, covariance_matrix);
+  // ROS_WARN(
+  //   "covariance_matrix: [\n%f, %f, %f,\n %f, %f, %f,\n %f, %f, %f\n]",
+  //   covariance_matrix(0, 0),
+  //   covariance_matrix(0, 1),
+  //   covariance_matrix(0, 2),
+  //   covariance_matrix(1, 0),
+  //   covariance_matrix(1, 1),
+  //   covariance_matrix(1, 2),
+  //   covariance_matrix(2, 0),
+  //   covariance_matrix(2, 1),
+  //   covariance_matrix(2, 2));
 
-  wo_pred_error = no_guess.inverse() * registration->getFinalTransformation();
-  ukf->correct(observation);
-  imu_pred_error = init_guess.inverse() * registration->getFinalTransformation();
+  // registration_measurement_noise.middleRows(0, 3) *= 0.01 * fitness_score;   // Position
+  // registration_measurement_noise.middleRows(3, 4) *= 0.001 * fitness_score;  // Orientation
+  wo_pred_error = no_guess.inverse() * trans;
+  imu_pred_error = init_guess.inverse() * trans;
   odom_pred_error = imu_pred_error;
-
+  Eigen::MatrixXf registration_measurement_noise = Eigen::MatrixXf::Identity(7, 7);
+  registration_measurement_noise.middleRows(0, 3) *= 0.001 * fitness_score;  // Position
+  registration_measurement_noise.middleRows(3, 4) *= 0.001 * fitness_score;  // Orientation
+  ukf->setMeasurementNoiseCov(registration_measurement_noise);
+  ukf->correct(observation);
+  // if (fitness_score < score_threshold) {
+  //   ukf->correct(observation);
+  // }
   return aligned;
 }
 
