@@ -143,35 +143,23 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   if (init_stamp.is_zero()) {
     init_stamp = stamp;
   }
-
   last_correction_stamp = stamp;
-
   Eigen::Matrix4f no_guess = last_observation;
   Eigen::Matrix4f init_guess = matrix();
-
   pcl::PointCloud<PointT>::Ptr aligned(new pcl::PointCloud<PointT>());
   registration->setInputSource(cloud);
-  // double score_init = registration->getFitnessScore();
   registration->align(*aligned, init_guess);
-  double score_in = registration->getFitnessScore();
-  // Get fitness score between aligned point and map
-  // registration->setInputSource(aligned);
-  // double score_out = registration->getFitnessScore();
-  fitness_score = score_in;
-  // ROS_WARN("fitness_score: %f -> %f ->", score_init, score_in, score_out);
+  fitness_score = registration->getFitnessScore();
   ROS_WARN("fitness_score: %f", fitness_score);
   if (fitness_score > score_threshold) {
     return aligned;
   }
-
   Eigen::Matrix4f trans = registration->getFinalTransformation();
   Eigen::Vector3f p_measure = trans.block<3, 1>(0, 3);
   Eigen::Quaternionf q_measure(trans.block<3, 3>(0, 0));
-
   if (quat().coeffs().dot(q_measure.coeffs()) < 0.0f) {
     q_measure.coeffs() *= -1.0f;
   }
-
   // Get current estimation pose
   Eigen::Vector3f p_estimate = ukf->mean.head<3>();
   Eigen::Quaternionf q_estimate(ukf->mean[6], ukf->mean[7], ukf->mean[8], ukf->mean[9]);
@@ -181,7 +169,15 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   double diff_angular_norm = fabs(q_estimate.angularDistance(q_measure));
   // Devide difference by fitness_score
   double p_diff_scaling = 1.0;
-  double q_diff_scaling = 0.001;
+  double q_diff_scaling = 0.1;
+  double reliable_fitness = 0.1;
+  double angle_correction_reject_distance = 1.0;
+  double angle_correction_reliable_distance = 0.001;
+  if (diff_linear_norm > angle_correction_reject_distance) {
+    q_diff_scaling = 0.0;
+  } else {
+    q_diff_scaling = angle_correction_reliable_distance / (angle_correction_reliable_distance + diff_linear_norm / angle_correction_reject_distance);
+  }
   if (diff_linear_norm > 1.0) {
     p_diff_scaling /= diff_linear_norm;
   }
@@ -189,38 +185,14 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     q_diff_scaling /= diff_angular_norm;
   }
   // Add difference to current estimation
-  p_measure = p_estimate + p_diff_scaling * p_diff / (1.0 + 1.0 * fitness_score);
-  q_measure = q_estimate.slerp(q_diff_scaling / (1.0 + 1000.0 * fitness_score), q_measure);
+  p_measure = p_estimate + p_diff * (reliable_fitness / (reliable_fitness + fitness_score / p_diff_scaling));
+  q_measure = q_estimate.slerp(reliable_fitness / (reliable_fitness + fitness_score / q_diff_scaling), q_measure);
   // Update kalman filter
   Eigen::VectorXf observation(7);
   observation.middleRows(0, 3) = p_measure;
   observation.middleRows(3, 4) = Eigen::Vector4f(q_measure.w(), q_measure.x(), q_measure.y(), q_measure.z());
   last_observation = trans;
-  // Get size
-  // Eigen::Matrix3f covariance_matrix;
-  // Eigen::Vector4f centroid;
-  // pcl::compute3DCentroid(*aligned, centroid);
-  // ROS_WARN("position: [%f, %f, %f]", p[0], p[1], p[2]);
-  // ROS_WARN("centroid: [%f, %f, %f]", centroid(0), centroid(1), centroid(2));
-  // Eigen::Vector3f p_centroid = centroid.head<3>();
-  // double centroid_distance = (p_centroid - p).norm();
-  // ROS_WARN("centroid_distance: %f", centroid_distance);
-  // int points_num = aligned->points.size();
-  // computeCovarianceMatrix(*aligned, centroid, covariance_matrix);
-  // ROS_WARN(
-  //   "covariance_matrix: [\n%f, %f, %f,\n %f, %f, %f,\n %f, %f, %f\n]",
-  //   covariance_matrix(0, 0),
-  //   covariance_matrix(0, 1),
-  //   covariance_matrix(0, 2),
-  //   covariance_matrix(1, 0),
-  //   covariance_matrix(1, 1),
-  //   covariance_matrix(1, 2),
-  //   covariance_matrix(2, 0),
-  //   covariance_matrix(2, 1),
-  //   covariance_matrix(2, 2));
-
-  // registration_measurement_noise.middleRows(0, 3) *= 0.01 * fitness_score;   // Position
-  // registration_measurement_noise.middleRows(3, 4) *= 0.001 * fitness_score;  // Orientation
+  // Fill data
   wo_pred_error = no_guess.inverse() * trans;
   imu_pred_error = init_guess.inverse() * trans;
   odom_pred_error = imu_pred_error;
@@ -229,9 +201,6 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   registration_measurement_noise.middleRows(3, 4) *= 0.001 * fitness_score;  // Orientation
   ukf->setMeasurementNoiseCov(registration_measurement_noise);
   ukf->correct(observation);
-  // if (fitness_score < score_threshold) {
-  //   ukf->correct(observation);
-  // }
   return aligned;
 }
 
