@@ -153,10 +153,11 @@ private:
     downsample_filter = voxelgrid;
 
     NODELET_INFO("create registration method for localization");
-    registration = create_registration();
+    registration_global = create_registration();
+    registration_local = create_registration();
 
     // global localization
-    NODELET_INFO("create registration method for fallback during relocalization");
+    NODELET_INFO("create registration_global method for fallback during relocalization");
     relocalizing = false;
     delta_estimater.reset(new DeltaEstimater(create_registration()));
 
@@ -164,7 +165,8 @@ private:
     if (private_nh.param<bool>("specify_init_pose", true)) {
       NODELET_INFO("initialize pose estimator with specified parameters!!");
       pose_estimator.reset(new hdl_localization::PoseEstimator(
-        registration,
+        registration_global,
+        registration_local,
         Eigen::Vector3f(private_nh.param<double>("init_pos_x", 0.0), private_nh.param<double>("init_pos_y", 0.0), private_nh.param<double>("init_pos_z", 0.0)),
         Eigen::Quaternionf(
           private_nh.param<double>("init_ori_w", 1.0),
@@ -172,12 +174,12 @@ private:
           private_nh.param<double>("init_ori_y", 0.0),
           private_nh.param<double>("init_ori_z", 0.0)),
         private_nh.param<double>("cool_time_duration", 0.5),
-        private_nh.param<double>("fitness_reject", 5.0),
-        private_nh.param<double>("fitness_reliable", 1.0),
+        private_nh.param<double>("fitness_reject", 10.0),
+        private_nh.param<double>("fitness_reliable", 0.1),
         private_nh.param<double>("linear_correction_gain", 1.0),
         private_nh.param<double>("angular_correction_gain", 1.0),
         private_nh.param<double>("angular_correction_distance_reject", 1.0),
-        private_nh.param<double>("angular_correction_distance_reliable", 0.001)));
+        private_nh.param<double>("angular_correction_distance_reliable", 0.01)));
     }
   }
 
@@ -322,7 +324,7 @@ private:
     pcl::fromROSMsg(*points_msg, *cloud);
     globalmap = cloud;
 
-    registration->setInputTarget(globalmap);
+    registration_global->setInputTarget(globalmap);
 
     if (use_global_localization) {
       NODELET_INFO("set globalmap for global localization!");
@@ -376,16 +378,17 @@ private:
 
     std::lock_guard<std::mutex> lock(pose_estimator_mutex);
     pose_estimator.reset(new hdl_localization::PoseEstimator(
-      registration,
+      registration_global,
+      registration_local,
       pose.translation(),
       Eigen::Quaternionf(pose.linear()),
       private_nh.param<double>("cool_time_duration", 0.5),
-      private_nh.param<double>("fitness_reject", 5.0),
-      private_nh.param<double>("fitness_reliable", 1.0),
+      private_nh.param<double>("fitness_reject", 10.0),
+      private_nh.param<double>("fitness_reliable", 0.1),
       private_nh.param<double>("linear_correction_gain", 1.0),
       private_nh.param<double>("angular_correction_gain", 1.0),
       private_nh.param<double>("angular_correction_distance_reject", 1.0),
-      private_nh.param<double>("angular_correction_distance_reliable", 0.001)));
+      private_nh.param<double>("angular_correction_distance_reliable", 0.01)));
 
     relocalizing = false;
 
@@ -402,16 +405,17 @@ private:
     const auto& p = pose_msg->pose.pose.position;
     const auto& q = pose_msg->pose.pose.orientation;
     pose_estimator.reset(new hdl_localization::PoseEstimator(
-      registration,
+      registration_global,
+      registration_local,
       Eigen::Vector3f(p.x, p.y, p.z),
       Eigen::Quaternionf(q.w, q.x, q.y, q.z),
       private_nh.param<double>("cool_time_duration", 0.5),
-      private_nh.param<double>("fitness_reject", 5.0),
-      private_nh.param<double>("fitness_reliable", 1.0),
+      private_nh.param<double>("fitness_reject", 10.0),
+      private_nh.param<double>("fitness_reliable", 0.1),
       private_nh.param<double>("linear_correction_gain", 1.0),
       private_nh.param<double>("angular_correction_gain", 1.0),
       private_nh.param<double>("angular_correction_distance_reject", 1.0),
-      private_nh.param<double>("angular_correction_distance_reliable", 0.001)));
+      private_nh.param<double>("angular_correction_distance_reliable", 0.01)));
   }
 
   /**
@@ -500,7 +504,7 @@ private:
     ScanMatchingStatus status;
     status.header = header;
 
-    status.has_converged = registration->hasConverged();
+    status.has_converged = registration_global->hasConverged();
     status.matching_error = 0.0;
 
     const double max_correspondence_dist = private_nh.param<double>("status_max_correspondence_dist", 0.5);
@@ -517,7 +521,7 @@ private:
       }
       num_valid_points++;
 
-      registration->getSearchMethodTarget()->nearestKSearch(pt, 1, k_indices, k_sq_dists);
+      registration_global->getSearchMethodTarget()->nearestKSearch(pt, 1, k_indices, k_sq_dists);
       if (k_sq_dists[0] < max_correspondence_dist * max_correspondence_dist) {
         status.matching_error += k_sq_dists[0];
         num_inliers++;
@@ -526,7 +530,7 @@ private:
 
     status.matching_error /= num_inliers;
     status.inlier_fraction = static_cast<float>(num_inliers) / std::max(1, num_valid_points);
-    status.relative_pose = tf2::eigenToTransform(Eigen::Isometry3d(registration->getFinalTransformation().cast<double>())).transform;
+    status.relative_pose = tf2::eigenToTransform(Eigen::Isometry3d(registration_global->getFinalTransformation().cast<double>())).transform;
 
     status.prediction_labels.reserve(2);
     status.prediction_errors.reserve(2);
@@ -589,7 +593,8 @@ private:
   // globalmap and registration method
   pcl::PointCloud<PointT>::Ptr globalmap;
   pcl::Filter<PointT>::Ptr downsample_filter;
-  pcl::Registration<PointT, PointT>::Ptr registration;
+  pcl::Registration<PointT, PointT>::Ptr registration_global;
+  pcl::Registration<PointT, PointT>::Ptr registration_local;
 
   // pose estimator
   std::mutex pose_estimator_mutex;

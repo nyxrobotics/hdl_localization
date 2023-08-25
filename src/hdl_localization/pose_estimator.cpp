@@ -15,7 +15,8 @@ namespace hdl_localization {
  * @param fitness_reject     Do not process localization when scan matching fitness score is low
  */
 PoseEstimator::PoseEstimator(
-  pcl::Registration<PointT, PointT>::Ptr& registration,
+  pcl::Registration<PointT, PointT>::Ptr& registration_global,
+  pcl::Registration<PointT, PointT>::Ptr& registration_local,
   const Eigen::Vector3f& pos,
   const Eigen::Quaternionf& quat,
   double cool_time_duration,
@@ -24,17 +25,16 @@ PoseEstimator::PoseEstimator(
   double linear_correction_gain,
   double angular_correction_gain,
   double angular_correction_distance_reject,
-  double angular_correction_distance_reliable
-  )
-: registration(registration),
+  double angular_correction_distance_reliable)
+: registration_global(registration_global),
+  registration_local(registration_local),
   cool_time_duration(cool_time_duration),
   fitness_reject(fitness_reject),
   fitness_reliable(fitness_reliable),
   linear_correction_gain(linear_correction_gain),
   angular_correction_gain(angular_correction_gain),
   angular_correction_distance_reject(angular_correction_distance_reject),
-  angular_correction_distance_reliable(angular_correction_distance_reliable)
-  {
+  angular_correction_distance_reliable(angular_correction_distance_reliable) {
   last_observation = Eigen::Matrix4f::Identity();
   last_observation.block<3, 3>(0, 0) = quat.toRotationMatrix();
   last_observation.block<3, 1>(0, 3) = pos;
@@ -155,18 +155,22 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   if (init_stamp.is_zero()) {
     init_stamp = stamp;
   }
+  double local_fitness;
+  Eigen::Matrix4f local_matrix = local_travel(cloud, local_fitness);
+  ROS_WARN("local_matrix: [%f, %f, %f, %f; %f, %f, %f, %f; %f, %f, %f, %f]", local_matrix(0, 0), local_matrix(0, 1), local_matrix(0, 2), local_matrix(0, 3), local_matrix(1, 0), local_matrix(1, 1), local_matrix(1, 2), local_matrix(1, 3), local_matrix(2, 0), local_matrix(2, 1), local_matrix(2, 2), local_matrix(2, 3));
+
   last_correction_stamp = stamp;
   Eigen::Matrix4f no_guess = last_observation;
-  Eigen::Matrix4f init_guess = matrix();
+  Eigen::Matrix4f init_guess = matrix() * local_matrix;
   pcl::PointCloud<PointT>::Ptr aligned(new pcl::PointCloud<PointT>());
-  registration->setInputSource(cloud);
-  registration->align(*aligned, init_guess);
-  fitness_score = registration->getFitnessScore();
+  registration_global->setInputSource(cloud);
+  registration_global->align(*aligned, init_guess);
+  fitness_score = registration_global->getFitnessScore();
   ROS_WARN("fitness_score: %f", fitness_score);
   if (fitness_score > fitness_reject) {
     return aligned;
   }
-  Eigen::Matrix4f trans = registration->getFinalTransformation();
+  Eigen::Matrix4f trans = registration_global->getFinalTransformation();
   Eigen::Vector3f p_measure = trans.block<3, 1>(0, 3);
   Eigen::Quaternionf q_measure(trans.block<3, 3>(0, 0));
   if (quat().coeffs().dot(q_measure.coeffs()) < 0.0f) {
@@ -216,6 +220,19 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   ukf->setMeasurementNoiseCov(registration_measurement_noise);
   ukf->correct(observation);
   return aligned;
+}
+Eigen::Matrix4f PoseEstimator::local_travel(const pcl::PointCloud<PointT>::ConstPtr& cloud, double& fitness_score) {
+  Eigen::Matrix4f output_transform = Eigen::Matrix4f::Identity();
+  if (init_stamp.is_zero()) {
+    registration_local->setInputTarget(cloud);
+    return output_transform;
+  }
+  registration_local->setInputSource(cloud);
+  pcl::PointCloud<PointT>::Ptr aligned(new pcl::PointCloud<PointT>());
+  registration_local->align(*aligned,output_transform);
+  output_transform = registration_local->getFinalTransformation();
+  registration_local->setInputTarget(cloud);
+  return output_transform;
 }
 
 /* getters */

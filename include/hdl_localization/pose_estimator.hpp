@@ -37,7 +37,8 @@ public:
    * @param fitness_reject     Do not process localization when scan matching fitness score is low
    */
   PoseEstimator(
-    pcl::Registration<PointT, PointT>::Ptr& registration,
+    pcl::Registration<PointT, PointT>::Ptr& registration_global,
+    pcl::Registration<PointT, PointT>::Ptr& registration_local,
     const Eigen::Vector3f& pos,
     const Eigen::Quaternionf& quat,
     double cool_time_duration = 1.0,
@@ -78,6 +79,7 @@ public:
    * @return cloud aligned to the globalmap
    */
   pcl::PointCloud<PointT>::Ptr correct(const ros::Time& stamp, const pcl::PointCloud<PointT>::ConstPtr& cloud, double& fitness_score);
+  Eigen::Matrix4f local_travel(const pcl::PointCloud<PointT>::ConstPtr& cloud, double& fitness_score);
 
   /* getters */
   ros::Time last_correction_time() const;
@@ -113,7 +115,8 @@ private:
   boost::optional<Eigen::Matrix4f> imu_pred_error;
   boost::optional<Eigen::Matrix4f> odom_pred_error;
 
-  pcl::Registration<PointT, PointT>::Ptr registration;
+  pcl::Registration<PointT, PointT>::Ptr registration_global;
+  pcl::Registration<PointT, PointT>::Ptr registration_local;
 };
 
 }  // namespace hdl_localization
