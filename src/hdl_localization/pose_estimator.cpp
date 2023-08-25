@@ -12,17 +12,29 @@ namespace hdl_localization {
  * @param pos                 initial position
  * @param quat                initial orientation
  * @param cool_time_duration  during "cool time", prediction is not performed
- * @param score_threshold     Do not process localization when scan matching fitness score is low
+ * @param fitness_reject     Do not process localization when scan matching fitness score is low
  */
 PoseEstimator::PoseEstimator(
   pcl::Registration<PointT, PointT>::Ptr& registration,
   const Eigen::Vector3f& pos,
   const Eigen::Quaternionf& quat,
   double cool_time_duration,
-  double score_threshold)
+  double fitness_reject,
+  double fitness_reliable,
+  double linear_correction_gain,
+  double angular_correction_gain,
+  double angular_correction_distance_reject,
+  double angular_correction_distance_reliable
+  )
 : registration(registration),
   cool_time_duration(cool_time_duration),
-  score_threshold(score_threshold) {
+  fitness_reject(fitness_reject),
+  fitness_reliable(fitness_reliable),
+  linear_correction_gain(linear_correction_gain),
+  angular_correction_gain(angular_correction_gain),
+  angular_correction_distance_reject(angular_correction_distance_reject),
+  angular_correction_distance_reliable(angular_correction_distance_reliable)
+  {
   last_observation = Eigen::Matrix4f::Identity();
   last_observation.block<3, 3>(0, 0) = quat.toRotationMatrix();
   last_observation.block<3, 1>(0, 3) = pos;
@@ -151,7 +163,7 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   registration->align(*aligned, init_guess);
   fitness_score = registration->getFitnessScore();
   ROS_WARN("fitness_score: %f", fitness_score);
-  if (fitness_score > score_threshold) {
+  if (fitness_score > fitness_reject) {
     return aligned;
   }
   Eigen::Matrix4f trans = registration->getFinalTransformation();
@@ -168,25 +180,27 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   double diff_linear_norm = (p_measure - p_estimate).norm();
   double diff_angular_norm = fabs(q_estimate.angularDistance(q_measure));
   // Devide difference by fitness_score
-  double p_diff_scaling = 1.0;
-  double q_diff_scaling = 0.1;
-  double reliable_fitness = 0.1;
-  double angle_correction_reject_distance = 1.0;
-  double angle_correction_reliable_distance = 0.001;
-  if (diff_linear_norm > angle_correction_reject_distance) {
+  double p_diff_scaling = linear_correction_gain;
+  double q_diff_scaling = angular_correction_gain;
+  if (diff_linear_norm > angular_correction_distance_reject) {
     q_diff_scaling = 0.0;
   } else {
-    q_diff_scaling = angle_correction_reliable_distance / (angle_correction_reliable_distance + diff_linear_norm / angle_correction_reject_distance);
+    q_diff_scaling = angular_correction_distance_reliable / (angular_correction_distance_reliable + diff_linear_norm / angular_correction_distance_reject);
   }
+  // Limit max correction to prevent jumping
   if (diff_linear_norm > 1.0) {
     p_diff_scaling /= diff_linear_norm;
+    q_diff_scaling /= diff_linear_norm;
   }
   if (diff_angular_norm > 1.0) {
+    p_diff_scaling /= diff_angular_norm;
     q_diff_scaling /= diff_angular_norm;
   }
+  p_diff_scaling *= (fitness_reliable / (fitness_reliable + fitness_score));
+  q_diff_scaling *= (fitness_reliable / (fitness_reliable + fitness_score));
   // Add difference to current estimation
-  p_measure = p_estimate + p_diff * (reliable_fitness / (reliable_fitness + fitness_score / p_diff_scaling));
-  q_measure = q_estimate.slerp(reliable_fitness / (reliable_fitness + fitness_score / q_diff_scaling), q_measure);
+  p_measure = p_estimate + p_diff * p_diff_scaling;
+  q_measure = q_estimate.slerp(q_diff_scaling, q_measure);
   // Update kalman filter
   Eigen::VectorXf observation(7);
   observation.middleRows(0, 3) = p_measure;

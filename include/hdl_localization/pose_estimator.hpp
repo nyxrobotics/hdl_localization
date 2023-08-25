@@ -34,14 +34,20 @@ public:
    * @param pos                 initial position
    * @param quat                initial orientation
    * @param cool_time_duration  during "cool time", prediction is not performed
-   * @param score_threshold     Do not process localization when scan matching fitness score is low
+   * @param fitness_reject     Do not process localization when scan matching fitness score is low
    */
   PoseEstimator(
     pcl::Registration<PointT, PointT>::Ptr& registration,
     const Eigen::Vector3f& pos,
     const Eigen::Quaternionf& quat,
     double cool_time_duration = 1.0,
-    double score_threshold = 100.0);
+    double fitness_reject = 100.0,
+    double fitness_reliable = 0.1,
+    double linear_correction_gain = 1.0,
+    double angular_correction_gain = 1.0,
+    double angular_correction_distance_reject = 1.0,
+    double angular_correction_distance_reliable = 0.001
+  );
   ~PoseEstimator();
 
   /**
@@ -90,7 +96,13 @@ private:
   ros::Time prev_stamp;             // when the estimator was updated last time
   ros::Time last_correction_stamp;  // when the estimator performed the correction step
   double cool_time_duration;        // during "cool time", prediction is not performed
-  double score_threshold;           // Do not process localization when scan matching fitness score is low
+  double linear_correction_gain;
+  double angular_correction_gain;
+  double fitness_reject;            // Do not process localization when scan matching fitness score is low
+  double fitness_reliable;
+  double angular_correction_distance_reject;
+  double angular_correction_distance_reliable;
+
 
   Eigen::MatrixXf process_noise;
   Eigen::MatrixXf odom_process_noise, imu_process_noise;

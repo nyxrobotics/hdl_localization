@@ -172,7 +172,12 @@ private:
           private_nh.param<double>("init_ori_y", 0.0),
           private_nh.param<double>("init_ori_z", 0.0)),
         private_nh.param<double>("cool_time_duration", 0.5),
-        private_nh.param<double>("score_threshold", 5.0)));
+        private_nh.param<double>("fitness_reject", 5.0),
+        private_nh.param<double>("fitness_reliable", 1.0),
+        private_nh.param<double>("linear_correction_gain", 1.0),
+        private_nh.param<double>("angular_correction_gain", 1.0),
+        private_nh.param<double>("angular_correction_distance_reject", 1.0),
+        private_nh.param<double>("angular_correction_distance_reliable", 0.001)));
     }
   }
 
@@ -375,7 +380,12 @@ private:
       pose.translation(),
       Eigen::Quaternionf(pose.linear()),
       private_nh.param<double>("cool_time_duration", 0.5),
-      private_nh.param<double>("score_threshold", 5.0)));
+      private_nh.param<double>("fitness_reject", 5.0),
+      private_nh.param<double>("fitness_reliable", 1.0),
+      private_nh.param<double>("linear_correction_gain", 1.0),
+      private_nh.param<double>("angular_correction_gain", 1.0),
+      private_nh.param<double>("angular_correction_distance_reject", 1.0),
+      private_nh.param<double>("angular_correction_distance_reliable", 0.001)));
 
     relocalizing = false;
 
@@ -396,7 +406,12 @@ private:
       Eigen::Vector3f(p.x, p.y, p.z),
       Eigen::Quaternionf(q.w, q.x, q.y, q.z),
       private_nh.param<double>("cool_time_duration", 0.5),
-      private_nh.param<double>("score_threshold", 5.0)));
+      private_nh.param<double>("fitness_reject", 5.0),
+      private_nh.param<double>("fitness_reliable", 1.0),
+      private_nh.param<double>("linear_correction_gain", 1.0),
+      private_nh.param<double>("angular_correction_gain", 1.0),
+      private_nh.param<double>("angular_correction_distance_reject", 1.0),
+      private_nh.param<double>("angular_correction_distance_reliable", 0.001)));
   }
 
   /**
