@@ -46,8 +46,7 @@ public:
     double linear_correction_gain = 1.0,
     double angular_correction_gain = 1.0,
     double angular_correction_distance_reject = 1.0,
-    double angular_correction_distance_reliable = 0.001
-  );
+    double angular_correction_distance_reliable = 0.001);
   ~PoseEstimator();
 
   /**
@@ -98,11 +97,10 @@ private:
   double cool_time_duration;        // during "cool time", prediction is not performed
   double linear_correction_gain;
   double angular_correction_gain;
-  double fitness_reject;            // Do not process localization when scan matching fitness score is low
+  double fitness_reject;  // Do not process localization when scan matching fitness score is low
   double fitness_reliable;
   double angular_correction_distance_reject;
   double angular_correction_distance_reliable;
-
 
   Eigen::MatrixXf process_noise;
   Eigen::MatrixXf odom_process_noise, imu_process_noise;

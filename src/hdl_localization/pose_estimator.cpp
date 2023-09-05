@@ -24,8 +24,7 @@ PoseEstimator::PoseEstimator(
   double linear_correction_gain,
   double angular_correction_gain,
   double angular_correction_distance_reject,
-  double angular_correction_distance_reliable
-  )
+  double angular_correction_distance_reliable)
 : registration(registration),
   cool_time_duration(cool_time_duration),
   fitness_reject(fitness_reject),
@@ -33,8 +32,7 @@ PoseEstimator::PoseEstimator(
   linear_correction_gain(linear_correction_gain),
   angular_correction_gain(angular_correction_gain),
   angular_correction_distance_reject(angular_correction_distance_reject),
-  angular_correction_distance_reliable(angular_correction_distance_reliable)
-  {
+  angular_correction_distance_reliable(angular_correction_distance_reliable) {
   last_observation = Eigen::Matrix4f::Identity();
   last_observation.block<3, 3>(0, 0) = quat.toRotationMatrix();
   last_observation.block<3, 1>(0, 3) = pos;
@@ -90,15 +88,12 @@ void PoseEstimator::predict(const ros::Time& stamp) {
   if (init_stamp.is_zero()) {
     init_stamp = stamp;
   }
-
   if ((stamp - init_stamp).toSec() < cool_time_duration || prev_stamp.is_zero() || prev_stamp == stamp) {
     prev_stamp = stamp;
     return;
   }
-
   double dt = (stamp - prev_stamp).toSec();
   prev_stamp = stamp;
-
   ukf->setProcessNoiseCov(process_noise * dt);
   ukf->system.dt = dt;
   ukf->predict();
@@ -114,12 +109,10 @@ void PoseEstimator::predict_imu(const ros::Time& stamp, const Eigen::Vector3f& i
   if (init_stamp.is_zero()) {
     init_stamp = stamp;
   }
-
   if ((stamp - init_stamp).toSec() < cool_time_duration || prev_stamp.is_zero() || prev_stamp == stamp) {
     prev_stamp = stamp;
     return;
   }
-
   double dt = (stamp - prev_stamp).toSec();
   prev_stamp = stamp;
   ukf->setProcessNoiseCov(imu_process_noise * dt);
@@ -134,11 +127,13 @@ void PoseEstimator::predict_imu(const ros::Time& stamp, const Eigen::Vector3f& i
  * @param odom_twist_angular  angular velocity
  */
 void PoseEstimator::predict_odom(const ros::Time& stamp, const Eigen::Vector3f& odom_twist_linear, const Eigen::Vector3f& odom_twist_angular) {
+  if (init_stamp.is_zero()) {
+    init_stamp = stamp;
+  }
   if ((stamp - init_stamp).toSec() < cool_time_duration || prev_stamp.is_zero() || prev_stamp == stamp) {
     prev_stamp = stamp;
     return;
   }
-
   double dt = (stamp - prev_stamp).toSec();
   prev_stamp = stamp;
   ukf->setProcessNoiseCov(odom_process_noise * dt);
@@ -162,7 +157,6 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   registration->setInputSource(cloud);
   registration->align(*aligned, init_guess);
   fitness_score = registration->getFitnessScore();
-  ROS_WARN("fitness_score: %f", fitness_score);
   if (fitness_score > fitness_reject) {
     return aligned;
   }
@@ -196,23 +190,35 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     p_diff_scaling /= diff_angular_norm;
     q_diff_scaling /= diff_angular_norm;
   }
+  // When fitness_score is large, the gain of correction is reduced
   p_diff_scaling *= (fitness_reliable / (fitness_reliable + fitness_score));
   q_diff_scaling *= (fitness_reliable / (fitness_reliable + fitness_score));
   // Add difference to current estimation
-  p_measure = p_estimate + p_diff * p_diff_scaling;
-  q_measure = q_estimate.slerp(q_diff_scaling, q_measure);
+  Eigen::Vector3f p_measure_smooth = p_estimate + p_diff * p_diff_scaling;
+  Eigen::Quaternionf q_measure_smooth = q_estimate.slerp(q_diff_scaling, q_measure);
   // Update kalman filter
   Eigen::VectorXf observation(7);
-  observation.middleRows(0, 3) = p_measure;
-  observation.middleRows(3, 4) = Eigen::Vector4f(q_measure.w(), q_measure.x(), q_measure.y(), q_measure.z());
+  observation.middleRows(0, 3) = p_measure_smooth;
+  observation.middleRows(3, 4) = Eigen::Vector4f(q_measure_smooth.w(), q_measure_smooth.x(), q_measure_smooth.y(), q_measure_smooth.z());
   last_observation = trans;
   // Fill data
   wo_pred_error = no_guess.inverse() * trans;
   imu_pred_error = init_guess.inverse() * trans;
   odom_pred_error = imu_pred_error;
+  // Add remaining difference to covavriance
+  Eigen::Vector3f linear_err = p_measure - p_measure_smooth;
+  Eigen::Quaternionf q_err = q_measure * q_measure_smooth.inverse();
+  // Eigen::Vector3f euler_err = q_err.toRotationMatrix().eulerAngles(0, 1, 2);
   Eigen::MatrixXf registration_measurement_noise = Eigen::MatrixXf::Identity(7, 7);
   registration_measurement_noise.middleRows(0, 3) *= 0.001 * fitness_score;  // Position
   registration_measurement_noise.middleRows(3, 4) *= 0.001 * fitness_score;  // Orientation
+  registration_measurement_noise(0, 0) += fabs(linear_err.x());
+  registration_measurement_noise(1, 1) += fabs(linear_err.y());
+  registration_measurement_noise(2, 2) += fabs(linear_err.z());
+  registration_measurement_noise(3, 3) += fabs(q_err.w());
+  registration_measurement_noise(4, 4) += fabs(q_err.x());
+  registration_measurement_noise(5, 5) += fabs(q_err.y());
+  registration_measurement_noise(6, 6) += fabs(q_err.z());
   ukf->setMeasurementNoiseCov(registration_measurement_noise);
   ukf->correct(observation);
   return aligned;

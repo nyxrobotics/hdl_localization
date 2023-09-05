@@ -65,10 +65,11 @@ public:
     Vector3t next_pt = pt + vt * dt;
     next_state.middleRows(0, 3) = next_pt;
 
-    // velocity
+    // velocity (vel_z = 0);
     Vector3t g(0.0f, 0.0f, 9.80665f);
     Vector3t acc = qt * (imu_acc - acc_bias - g);
     Vector3t next_vt = vt + acc * dt;
+    next_vt.z() = 0.0f;
     next_state.middleRows(3, 3) = next_vt; // acceleration didn't contribute to accuracy due to large noise
 
     // orientation
@@ -96,8 +97,9 @@ public:
     // position
     next_state.middleRows(0, 3) = pt + vt * dt;
 
-    // velocity
+    // velocity (vel_z = 0);
     Vector3t vel = qt * raw_lin_vel;
+    vel.z() = 0.0f;
     next_state.middleRows(3, 3) = vel;
 
     // orientation
