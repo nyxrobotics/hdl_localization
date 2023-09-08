@@ -33,9 +33,10 @@ PoseEstimator::PoseEstimator(
   angular_correction_gain(angular_correction_gain),
   angular_correction_distance_reject(angular_correction_distance_reject),
   angular_correction_distance_reliable(angular_correction_distance_reliable) {
-  last_observation = Eigen::Matrix4f::Identity();
-  last_observation.block<3, 3>(0, 0) = quat.toRotationMatrix();
-  last_observation.block<3, 1>(0, 3) = pos;
+  Eigen::Matrix4f initial_pose = Eigen::Matrix4f::Identity();
+  initial_pose.block<3, 1>(0, 3) = pos;
+  initial_pose.block<3, 3>(0, 0) = quat.toRotationMatrix();
+  last_observation = initial_pose;
 
   process_noise = Eigen::MatrixXf::Identity(16, 16);
   process_noise.middleRows(0, 3) *= 1.0;    // Position
