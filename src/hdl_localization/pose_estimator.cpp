@@ -159,6 +159,7 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   registration->align(*aligned, init_guess);
   fitness_score = registration->getFitnessScore();
   if (fitness_score > fitness_reject) {
+    ROS_WARN_THROTTLE(1.0, "Scan matching fitness score is low (%f). Skip correction.", fitness_score);
     return aligned;
   }
   Eigen::Matrix4f trans = registration->getFinalTransformation();
