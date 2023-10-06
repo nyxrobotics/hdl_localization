@@ -86,9 +86,8 @@ public:
   Eigen::Quaternionf quat() const;
   Eigen::Matrix4f matrix() const;
 
-  const boost::optional<Eigen::Matrix4f>& wo_prediction_error() const;
-  const boost::optional<Eigen::Matrix4f>& imu_prediction_error() const;
-  const boost::optional<Eigen::Matrix4f>& odom_prediction_error() const;
+  const boost::optional<Eigen::Matrix4f>& without_pred_error() const;
+  const boost::optional<Eigen::Matrix4f>& motion_pred_error() const;
 
 private:
   ros::Time init_stamp;             // when the estimator was initialized
@@ -107,9 +106,8 @@ private:
   std::unique_ptr<kkl::alg::UnscentedKalmanFilterX<float, PoseSystem>> ukf;
 
   Eigen::Matrix4f last_observation;
-  boost::optional<Eigen::Matrix4f> wo_pred_error;
-  boost::optional<Eigen::Matrix4f> imu_pred_error;
-  boost::optional<Eigen::Matrix4f> odom_pred_error;
+  boost::optional<Eigen::Matrix4f> without_pred_error_;
+  boost::optional<Eigen::Matrix4f> motion_pred_error_;
 
   pcl::Registration<PointT, PointT>::Ptr registration;
 };

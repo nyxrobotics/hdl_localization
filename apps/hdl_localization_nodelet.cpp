@@ -596,22 +596,22 @@ private:
 
     std::vector<double> errors(6, 0.0);
 
-    if (pose_estimator->wo_prediction_error()) {
+    if (pose_estimator->without_pred_error()) {
       status.prediction_labels.push_back(std_msgs::String());
-      status.prediction_labels.back().data = "without_pred";
-      status.prediction_errors.push_back(tf2::eigenToTransform(Eigen::Isometry3d(pose_estimator->wo_prediction_error().get().cast<double>())).transform);
+      status.prediction_labels.back().data = "without_prediction";
+      status.prediction_errors.push_back(tf2::eigenToTransform(Eigen::Isometry3d(pose_estimator->without_pred_error().get().cast<double>())).transform);
     }
 
-    if (pose_estimator->imu_prediction_error()) {
+    if (pose_estimator->motion_pred_error()) {
       status.prediction_labels.push_back(std_msgs::String());
-      status.prediction_labels.back().data = use_imu ? "imu" : "motion_model";
-      status.prediction_errors.push_back(tf2::eigenToTransform(Eigen::Isometry3d(pose_estimator->imu_prediction_error().get().cast<double>())).transform);
-    }
-
-    if (pose_estimator->odom_prediction_error()) {
-      status.prediction_labels.push_back(std_msgs::String());
-      status.prediction_labels.back().data = "odom";
-      status.prediction_errors.push_back(tf2::eigenToTransform(Eigen::Isometry3d(pose_estimator->odom_prediction_error().get().cast<double>())).transform);
+      if(use_imu){
+        status.prediction_labels.back().data = "imu_prediction";
+      }else if(use_odom){
+        status.prediction_labels.back().data = "odom_prediction";
+      }else{
+        status.prediction_labels.back().data = "motion_model";
+      }
+      status.prediction_errors.push_back(tf2::eigenToTransform(Eigen::Isometry3d(pose_estimator->motion_pred_error().get().cast<double>())).transform);
     }
 
     status_pub.publish(status);

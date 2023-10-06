@@ -1,5 +1,4 @@
 #include <hdl_localization/pose_estimator.hpp>
-
 #include <pcl/filters/voxel_grid.h>
 #include <hdl_localization/pose_system.hpp>
 #include <kkl/alg/unscented_kalman_filter.hpp>
@@ -7,17 +6,17 @@
 namespace hdl_localization {
 
 /**
- * @brief constructor
- * @param registration        registration method
- * @param pos                 initial position
- * @param quat                initial orientation
- * @param cool_time_duration  during "cool time", prediction is not performed
- * @param fitness_reject     Do not process localization when scan matching fitness score is low
+ * @brief Constructor
+ * @param registration        Registration method
+ * @param initial_position    Initial position
+ * @param initial_orientation Initial orientation
+ * @param cool_time_duration  Duration during which prediction is not performed ("cool time")
+ * @param fitness_reject      Do not process localization when scan matching fitness score is low
  */
 PoseEstimator::PoseEstimator(
   pcl::Registration<PointT, PointT>::Ptr& registration,
-  const Eigen::Vector3f& pos,
-  const Eigen::Quaternionf& quat,
+  const Eigen::Vector3f& initial_position,
+  const Eigen::Quaternionf& initial_orientation,
   double cool_time_duration,
   double fitness_reject,
   double fitness_reliable,
@@ -33,11 +32,14 @@ PoseEstimator::PoseEstimator(
   angular_correction_gain(angular_correction_gain),
   angular_correction_distance_reject(angular_correction_distance_reject),
   angular_correction_distance_reliable(angular_correction_distance_reliable) {
+
+  // Initialize initial pose
   Eigen::Matrix4f initial_pose = Eigen::Matrix4f::Identity();
-  initial_pose.block<3, 1>(0, 3) = pos;
-  initial_pose.block<3, 3>(0, 0) = quat.toRotationMatrix();
+  initial_pose.block<3, 1>(0, 3) = initial_position;
+  initial_pose.block<3, 3>(0, 0) = initial_orientation.toRotationMatrix();
   last_observation = initial_pose;
 
+  // Initialize process noise covariance matrix
   process_noise = Eigen::MatrixXf::Identity(16, 16);
   process_noise.middleRows(0, 3) *= 1.0;    // Position
   process_noise.middleRows(3, 3) *= 1.0;    // Velocity
@@ -45,38 +47,43 @@ PoseEstimator::PoseEstimator(
   process_noise.middleRows(10, 3) *= 1e-6;  // Acceleration
   process_noise.middleRows(13, 3) *= 1e-6;  // Angular velocity
 
-  // Scan matching measurement covariance
+  // Initialize measurement noise covariance matrix
   Eigen::MatrixXf measurement_noise = Eigen::MatrixXf::Identity(7, 7);
   measurement_noise.middleRows(0, 3) *= 0.01;   // Position
   measurement_noise.middleRows(3, 4) *= 0.001;  // Orientation
 
+  // Initialize mean vector
   Eigen::VectorXf mean(16);
-  mean.middleRows(0, 3) = pos;
+  mean.middleRows(0, 3) = initial_position;
   mean.middleRows(3, 3).setZero();
-  mean.middleRows(6, 4) = Eigen::Vector4f(quat.w(), quat.x(), quat.y(), quat.z()).normalized();
+  mean.middleRows(6, 4) = Eigen::Vector4f(initial_orientation.w(), initial_orientation.x(), initial_orientation.y(), initial_orientation.z()).normalized();
   mean.middleRows(10, 3).setZero();
   mean.middleRows(13, 3).setZero();
 
   // TODO: Change odom covariance constants to ROS params
-  // or subscribe an odometry topic and use it's covariance
-  // Odometry linear velocity covariance
+  // or subscribe an odometry topic and use its covariance
+  // Initialize odometry process noise covariance matrix
   odom_process_noise = Eigen::MatrixXf::Identity(16, 16);
   odom_process_noise.middleRows(0, 3) *= 1e-3;    // Position
   odom_process_noise.middleRows(3, 3) *= 1e-9;    // Velocity
   odom_process_noise.middleRows(6, 4) *= 1e-6;    // Orientation
   odom_process_noise.middleRows(13, 3) *= 1e-12;  // Angular velocity
 
-  // IMU angular velocity covariance
+  // Initialize IMU process noise covariance matrix
   imu_process_noise = Eigen::MatrixXf::Identity(16, 16);
   imu_process_noise.middleRows(6, 4) *= 0.5;    // Orientation
   imu_process_noise.middleRows(10, 3) *= 1e-6;  // Acceleration
   imu_process_noise.middleRows(13, 3) *= 1e-6;  // Angular velocity
 
+  // Initialize covariance matrix
   Eigen::MatrixXf cov = Eigen::MatrixXf::Identity(16, 16) * 0.01;
   PoseSystem system;
   ukf.reset(new kkl::alg::UnscentedKalmanFilterX<float, PoseSystem>(system, 16, 7, process_noise, measurement_noise, mean, cov));
 }
 
+/**
+ * @brief Destructor
+ */
 PoseEstimator::~PoseEstimator() {}
 
 /**
@@ -101,10 +108,10 @@ void PoseEstimator::predict(const ros::Time& stamp) {
 }
 
 /**
- * @brief predict
- * @param stamp    timestamp
- * @param imu_acc      acceleration
- * @param imu_gyro     angular velocity
+ * @brief predict using timestamp, IMU acceleration, and IMU angular velocity
+ * @param stamp         Timestamp
+ * @param imu_acc       IMU acceleration
+ * @param imu_gyro      IMU angular velocity
  */
 void PoseEstimator::predict_imu(const ros::Time& stamp, const Eigen::Vector3f& imu_acc, const Eigen::Vector3f& imu_gyro) {
   if (init_stamp.is_zero()) {
@@ -122,10 +129,10 @@ void PoseEstimator::predict_imu(const ros::Time& stamp, const Eigen::Vector3f& i
 }
 
 /**
- * @brief predict_odom
- * @param stamp    timestamp
- * @param odom_twist_linear   linear velocity
- * @param odom_twist_angular  angular velocity
+ * @brief predict using timestamp, odometry linear velocity, and odometry angular velocity
+ * @param stamp             Timestamp
+ * @param odom_twist_linear Odometry linear velocity
+ * @param odom_twist_angular Odometry angular velocity
  */
 void PoseEstimator::predict_odom(const ros::Time& stamp, const Eigen::Vector3f& odom_twist_linear, const Eigen::Vector3f& odom_twist_angular) {
   if (init_stamp.is_zero()) {
@@ -143,9 +150,11 @@ void PoseEstimator::predict_odom(const ros::Time& stamp, const Eigen::Vector3f& 
 }
 
 /**
- * @brief correct
- * @param cloud   input cloud
- * @return cloud aligned to the globalmap
+ * @brief correct using point cloud
+ * @param stamp         Timestamp
+ * @param cloud         Input point cloud
+ * @param fitness_score Fitness score of the scan matching
+ * @return aligned point cloud
  */
 pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Time& stamp, const pcl::PointCloud<PointT>::ConstPtr& cloud, double& fitness_score) {
   if (init_stamp.is_zero()) {
@@ -208,9 +217,8 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   observation.middleRows(3, 4) = Eigen::Vector4f(q_measure_smooth.w(), q_measure_smooth.x(), q_measure_smooth.y(), q_measure_smooth.z());
   last_observation = trans;
   // Fill data
-  wo_pred_error = no_guess.inverse() * trans;
-  imu_pred_error = init_guess.inverse() * trans;
-  odom_pred_error = imu_pred_error;
+  without_pred_error_ = no_guess.inverse() * trans;
+  motion_pred_error_ = init_guess.inverse() * trans;
   // Add remaining difference to covavriance
   Eigen::Vector3f linear_err = p_measure - p_measure_smooth;
   Eigen::Quaternionf q_err = q_measure * q_measure_smooth.inverse();
@@ -231,22 +239,42 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
 }
 
 /* getters */
+/**
+ * @brief Get the timestamp of the last correction
+ * @return Timestamp of the last correction
+ */
 ros::Time PoseEstimator::last_correction_time() const {
   return last_correction_stamp;
 }
 
+/**
+ * @brief Get the estimated position
+ * @return Estimated position as a vector
+ */
 Eigen::Vector3f PoseEstimator::pos() const {
   return Eigen::Vector3f(ukf->mean[0], ukf->mean[1], ukf->mean[2]);
 }
 
+/**
+ * @brief Get the estimated velocity
+ * @return Estimated velocity as a vector
+ */
 Eigen::Vector3f PoseEstimator::vel() const {
   return Eigen::Vector3f(ukf->mean[3], ukf->mean[4], ukf->mean[5]);
 }
 
+/**
+ * @brief Get the estimated orientation
+ * @return Estimated orientation as a quaternion
+ */
 Eigen::Quaternionf PoseEstimator::quat() const {
   return Eigen::Quaternionf(ukf->mean[6], ukf->mean[7], ukf->mean[8], ukf->mean[9]).normalized();
 }
 
+/**
+ * @brief Get the estimated transformation matrix
+ * @return Estimated transformation matrix
+ */
 Eigen::Matrix4f PoseEstimator::matrix() const {
   Eigen::Matrix4f m = Eigen::Matrix4f::Identity();
   m.block<3, 3>(0, 0) = quat().toRotationMatrix();
@@ -254,15 +282,11 @@ Eigen::Matrix4f PoseEstimator::matrix() const {
   return m;
 }
 
-const boost::optional<Eigen::Matrix4f>& PoseEstimator::wo_prediction_error() const {
-  return wo_pred_error;
+const boost::optional<Eigen::Matrix4f>& PoseEstimator::without_pred_error() const {
+  return without_pred_error_;
 }
 
-const boost::optional<Eigen::Matrix4f>& PoseEstimator::imu_prediction_error() const {
-  return imu_pred_error;
-}
-
-const boost::optional<Eigen::Matrix4f>& PoseEstimator::odom_prediction_error() const {
-  return odom_pred_error;
+const boost::optional<Eigen::Matrix4f>& PoseEstimator::motion_pred_error() const {
+  return motion_pred_error_;
 }
 }  // namespace hdl_localization
