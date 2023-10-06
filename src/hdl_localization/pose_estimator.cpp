@@ -159,7 +159,7 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   registration->align(*aligned, init_guess);
   fitness_score = registration->getFitnessScore();
   if (fitness_score > fitness_reject) {
-    ROS_WARN_THROTTLE(1.0, "Scan matching fitness score is low (%f). Skip correction.", fitness_score);
+    ROS_WARN_THROTTLE(5.0, "Scan matching fitness score is low (%f). Skip correction.", fitness_score);
     return aligned;
   }
   Eigen::Matrix4f trans = registration->getFinalTransformation();
@@ -173,31 +173,35 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   Eigen::Quaternionf q_estimate(ukf->mean[6], ukf->mean[7], ukf->mean[8], ukf->mean[9]);
   // Get difference between predicted and measured
   Eigen::Vector3f p_diff = p_measure - p_estimate;
+  double diff_linear_scaling = std::max(std::min(linear_correction_gain, 1.0), 0.0);
+  double diff_angular_scaling = std::max(std::min(angular_correction_gain, 1.0), 0.0);
+  // Correct only the position because the accuracy of angle correction is low when the position is significantly off.
   double diff_linear_norm = (p_measure - p_estimate).norm();
   double diff_angular_norm = fabs(q_estimate.angularDistance(q_measure));
-  // Devide difference by fitness_score
-  double p_diff_scaling = linear_correction_gain;
-  double q_diff_scaling = angular_correction_gain;
   if (diff_linear_norm > angular_correction_distance_reject) {
-    q_diff_scaling = 0.0;
+    diff_angular_scaling = 0.0;
   } else {
-    q_diff_scaling = angular_correction_distance_reliable / (angular_correction_distance_reliable + diff_linear_norm / angular_correction_distance_reject);
+    diff_angular_scaling = angular_correction_distance_reliable / (angular_correction_distance_reliable + diff_linear_norm / angular_correction_distance_reject);
   }
   // Limit max correction to prevent jumping
-  if (diff_linear_norm > 1.0) {
-    p_diff_scaling /= diff_linear_norm;
-    q_diff_scaling /= diff_linear_norm;
+  double max_linear_correction = 1.0;
+  double max_angular_correction = 1.0;
+  if (diff_linear_norm > max_linear_correction) {
+    diff_linear_scaling /= (diff_linear_norm / max_linear_correction);
+    diff_angular_scaling /= (diff_linear_norm / max_linear_correction);
+    diff_angular_norm /= (diff_linear_norm / max_linear_correction);
   }
-  if (diff_angular_norm > 1.0) {
-    p_diff_scaling /= diff_angular_norm;
-    q_diff_scaling /= diff_angular_norm;
+  if (diff_angular_norm > max_angular_correction) {
+    diff_linear_scaling /= (diff_angular_norm / max_angular_correction);
+    diff_angular_scaling /= (diff_angular_norm / max_angular_correction);
+    diff_linear_norm /= (diff_angular_norm / max_angular_correction);
   }
   // When fitness_score is large, the gain of correction is reduced
-  p_diff_scaling *= (fitness_reliable / (fitness_reliable + fitness_score));
-  q_diff_scaling *= (fitness_reliable / (fitness_reliable + fitness_score));
+  diff_linear_scaling *= (fitness_reliable / (fitness_reliable + fitness_score));
+  diff_angular_scaling *= (fitness_reliable / (fitness_reliable + fitness_score));
   // Add difference to current estimation
-  Eigen::Vector3f p_measure_smooth = p_estimate + p_diff * p_diff_scaling;
-  Eigen::Quaternionf q_measure_smooth = q_estimate.slerp(q_diff_scaling, q_measure);
+  Eigen::Vector3f p_measure_smooth = p_estimate + p_diff * diff_linear_scaling;
+  Eigen::Quaternionf q_measure_smooth = q_estimate.slerp(diff_angular_scaling, q_measure);
   // Update kalman filter
   Eigen::VectorXf observation(7);
   observation.middleRows(0, 3) = p_measure_smooth;
