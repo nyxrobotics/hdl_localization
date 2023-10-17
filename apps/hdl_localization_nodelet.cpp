@@ -201,11 +201,10 @@ private:
       boost::shared_ptr<pcl::VoxelGrid<PointT>> voxelgrid(new pcl::VoxelGrid<PointT>());
       voxelgrid->setLeafSize(downsample_resolution, downsample_resolution, downsample_resolution);
       downsample_filter = voxelgrid;
-    }else{
+    } else {
       ROS_WARN("Input downsample_filter is disabled");
       downsample_filter.reset();
     }
-
 
     NODELET_INFO("create registration method for localization");
     registration = create_registration();
@@ -440,7 +439,29 @@ private:
    */
   void initialpose_callback(const geometry_msgs::PoseWithCovarianceStampedConstPtr& msg) {
     NODELET_INFO("[hdl_localization] initial pose received");
-    geometry_msgs::TransformStamped tf_map2global = tf_buffer.lookupTransform(map_frame, msg->header.frame_id, ros::Time(0), ros::Duration(10.0));
+    geometry_msgs::TransformStamped tf_map2global;
+    if (map_frame != msg->header.frame_id) {
+      tf_map2global = tf_buffer.lookupTransform(map_frame, msg->header.frame_id, ros::Time(0), ros::Duration(1.0));
+      if (tf_map2global.header.frame_id != map_frame) {
+        ROS_ERROR("[hdl_localization] Failed to get transform from %s to %s", map_frame.c_str(), msg->header.frame_id.c_str());
+        tf_map2global.transform.translation.x = 0.0;
+        tf_map2global.transform.translation.y = 0.0;
+        tf_map2global.transform.translation.z = 0.0;
+        tf_map2global.transform.rotation.x = 0.0;
+        tf_map2global.transform.rotation.y = 0.0;
+        tf_map2global.transform.rotation.z = 0.0;
+        tf_map2global.transform.rotation.w = 1.0;
+      }
+    }
+    else {
+      tf_map2global.transform.translation.x = 0.0;
+      tf_map2global.transform.translation.y = 0.0;
+      tf_map2global.transform.translation.z = 0.0;
+      tf_map2global.transform.rotation.x = 0.0;
+      tf_map2global.transform.rotation.y = 0.0;
+      tf_map2global.transform.rotation.z = 0.0;
+      tf_map2global.transform.rotation.w = 1.0;
+    }
     tf2::Vector3 vec_global2robot(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
     tf2::Quaternion q_global2robot(msg->pose.pose.orientation.x, msg->pose.pose.orientation.y, msg->pose.pose.orientation.z, msg->pose.pose.orientation.w);
     // Get vector from odom to robot
@@ -457,7 +478,7 @@ private:
     init_orientation.z() = q_map2robot.z();
     init_orientation.w() = q_map2robot.w();
     if (use_odom_frame) {
-      tf_buffer.clear();
+      odom_stamp_last = msg->header.stamp;
       odom_ready = false;
     }
     if (use_imu) {
@@ -604,11 +625,11 @@ private:
 
     if (pose_estimator->motionPredError()) {
       status.prediction_labels.push_back(std_msgs::String());
-      if(use_imu){
+      if (use_imu) {
         status.prediction_labels.back().data = "imu_prediction";
-      }else if(use_odom_frame){
+      } else if (use_odom_frame) {
         status.prediction_labels.back().data = "odom_prediction";
-      }else{
+      } else {
         status.prediction_labels.back().data = "motion_model";
       }
       status.prediction_errors.push_back(tf2::eigenToTransform(Eigen::Isometry3d(pose_estimator->motionPredError().get().cast<double>())).transform);
@@ -673,7 +694,7 @@ private:
   ros::ServiceServer relocalize_server;
   ros::ServiceClient set_global_map_service;
   ros::ServiceClient query_global_localization_service;
-};
+};  // namespace hdl_localization
 }  // namespace hdl_localization
 
 PLUGINLIB_EXPORT_CLASS(hdl_localization::HdlLocalizationNodelet, nodelet::Nodelet)
