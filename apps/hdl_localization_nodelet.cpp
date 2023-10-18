@@ -337,8 +337,8 @@ private:
       pose_estimator->predict(stamp);
     }
     // Perform scan matching using the calculated position as the initial value
-    double fitness_score;
-    auto aligned = pose_estimator->correct(stamp, filtered, fitness_score);
+    double pose_covariance[36] ;
+    auto aligned = pose_estimator->correct(stamp, filtered, pose_covariance);
 
     if (aligned_pub.getNumSubscribers()) {
       aligned->header.frame_id = map_frame;
@@ -350,7 +350,7 @@ private:
       publish_scan_matching_status(points_msg->header, aligned);
     }
 
-    publish_odometry(points_msg->header.stamp, pose_estimator->matrix(), fitness_score);
+    publish_odometry(points_msg->header.stamp, pose_estimator->matrix(), pose_covariance);
   }
 
   /**
@@ -521,7 +521,7 @@ private:
    * @param stamp  timestamp
    * @param pose   odometry pose to be published
    */
-  void publish_odometry(const ros::Time& stamp, const Eigen::Matrix4f& pose, const double fitness_score) {
+  void publish_odometry(const ros::Time& stamp, const Eigen::Matrix4f& pose, double pose_covariance[36]) {
     // broadcast the transform over tf
     if (publish_tf) {
       if (tf_buffer.canTransform(odom_frame, base_frame, ros::Time(0))) {
@@ -563,16 +563,19 @@ private:
     odom.child_frame_id = base_frame;
 
     tf::poseEigenToMsg(Eigen::Isometry3d(pose.cast<double>()), odom.pose.pose);
-    odom.pose.covariance[0] = private_nh.param<double>("cov_scaling_factor_x", 1.0) * fitness_score;
-    odom.pose.covariance[7] = private_nh.param<double>("cov_scaling_factor_y", 1.0) * fitness_score;
-    odom.pose.covariance[14] = private_nh.param<double>("cov_scaling_factor_z", 1.0) * fitness_score;
-    odom.pose.covariance[21] = private_nh.param<double>("cov_scaling_factor_R", 1.0) * fitness_score;
-    odom.pose.covariance[28] = private_nh.param<double>("cov_scaling_factor_P", 1.0) * fitness_score;
-    odom.pose.covariance[35] = private_nh.param<double>("cov_scaling_factor_Y", 1.0) * fitness_score;
+    odom.pose.covariance[0] = private_nh.param<double>("cov_scaling_factor_x", 1.0) * pose_covariance[0];
+    odom.pose.covariance[7] = private_nh.param<double>("cov_scaling_factor_y", 1.0) * pose_covariance[7];
+    odom.pose.covariance[14] = private_nh.param<double>("cov_scaling_factor_z", 1.0) * pose_covariance[14];
+    odom.pose.covariance[21] = private_nh.param<double>("cov_scaling_factor_R", 1.0) * pose_covariance[21];
+    odom.pose.covariance[28] = private_nh.param<double>("cov_scaling_factor_P", 1.0) * pose_covariance[28];
+    odom.pose.covariance[35] = private_nh.param<double>("cov_scaling_factor_Y", 1.0) * pose_covariance[35];
 
-    odom.twist.twist.linear.x = 0;
-    odom.twist.twist.linear.y = 0;
-    odom.twist.twist.angular.z = 0.0;
+    odom.twist.twist.linear.x = 0.0;
+    odom.twist.twist.linear.y = 0.0;
+    odom.twist.twist.linear.z = 0.0;
+    odom.twist.twist.linear.x = 0.0;
+    odom.twist.twist.linear.y = 0.0;
+    odom.twist.twist.linear.z = 0.0;
 
     pose_pub.publish(odom);
   }

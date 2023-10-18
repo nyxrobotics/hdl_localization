@@ -165,7 +165,7 @@ void PoseEstimator::predictOdom(const ros::Time& stamp, const Eigen::Vector3f& o
  * @param fitness_score Fitness score of the scan matching
  * @return aligned point cloud
  */
-pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Time& stamp, const pcl::PointCloud<PointT>::ConstPtr& cloud, double& fitness_score) {
+pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Time& stamp, const pcl::PointCloud<PointT>::ConstPtr& cloud, double pose_covariance[36]) {
   if (init_stamp_.is_zero()) {
     init_stamp_ = stamp;
   }
@@ -175,7 +175,7 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   pcl::PointCloud<PointT>::Ptr aligned(new pcl::PointCloud<PointT>());
   registration_->setInputSource(cloud);
   registration_->align(*aligned, init_guess);
-  fitness_score = registration_->getFitnessScore();
+  double fitness_score = registration_->getFitnessScore();
   if (fitness_score > fitness_reject_) {
     ROS_WARN_THROTTLE(5.0, "Scan matching fitness score is low (%f). Skip correction.", fitness_score);
     return aligned;
@@ -207,8 +207,8 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   Eigen::Vector3f p_estimate = ukf_->mean_.head<3>();
   Eigen::Quaternionf q_estimate(ukf_->mean_[6], ukf_->mean_[7], ukf_->mean_[8], ukf_->mean_[9]);
   // If the value is unreliable, the correction is reduced
-  double diff_linear_scaling = transform_probability * std::max(std::min(linear_correction_gain_, 1.0), 0.0);
-  double diff_angular_scaling = transform_probability * std::max(std::min(angular_correction_gain_, 1.0), 0.0);
+  double diff_linear_scaling = transform_probability;
+  double diff_angular_scaling = transform_probability;
   // Correct only the position because the accuracy of angle correction is low when the position is significantly off.
   double diff_linear_norm = (p_measure - p_estimate).norm();
   double diff_angular_norm = fabs(q_estimate.angularDistance(q_measure));
@@ -235,6 +235,10 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   // When fitness_score is large, the gain of correction is reduced
   diff_linear_scaling *= probability_scaling;
   diff_angular_scaling *= probability_scaling;
+  diff_linear_scaling *=  linear_correction_gain_;
+  diff_angular_scaling *=  angular_correction_gain_;
+  diff_linear_scaling = std::max(std::min(diff_linear_scaling, 1.0), 0.0);
+  diff_angular_scaling = std::max(std::min(diff_angular_scaling, 1.0), 0.0);
   // Add difference to current estimation
   Eigen::Vector3f p_measure_smooth = p_estimate + diff_linear_scaling * (p_measure - p_estimate);
   Eigen::Quaternionf q_measure_smooth = q_estimate.slerp(diff_angular_scaling, q_measure);
@@ -261,6 +265,22 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   // registration_measurement_noise(5, 5) += fabs(q_err.y());
   // registration_measurement_noise(6, 6) += fabs(q_err.z());
   // ukf_->setMeasurementNoiseCov(registration_measurement_noise);
+  transform_probability = std::max(transform_probability, 1e-6);
+  double covariance = std::max(0.0, 1.0 / transform_probability - 1.0);
+  for (int i = 0; i < 36; i++) {
+    if (i % 7 == 0) {
+      pose_covariance[i] = covariance;
+    } else {
+      pose_covariance[i] = 0;
+    }
+  }
+  Eigen::Vector3f euler_error = Eigen::Vector3f(q_err.toRotationMatrix().eulerAngles(0, 1, 2));
+  pose_covariance[0] += linear_err.x() * linear_err.x();
+  pose_covariance[7] += linear_err.y() * linear_err.y();
+  // pose_covariance[14] += fabs(linear_err.z());
+  // pose_covariance[21] += fabs(euler_error.x());
+  // pose_covariance[28] += fabs(euler_error.y());
+  pose_covariance[35] += euler_error.z() * euler_error.z();
   ukf_->correct(observation);
   return aligned;
 }
