@@ -52,14 +52,14 @@ PoseEstimator::PoseEstimator(
   process_noise_ = Eigen::MatrixXf::Identity(16, 16);
   process_noise_.middleRows(0, 3) *= 1.0;    // Position
   process_noise_.middleRows(3, 3) *= 1.0;    // Velocity
-  process_noise_.middleRows(6, 4) *= 0.5;    // Orientation
+  process_noise_.middleRows(6, 4) *= 1.0;    // Orientation
   process_noise_.middleRows(10, 3) *= 1e-6;  // Acceleration
   process_noise_.middleRows(13, 3) *= 1e-6;  // Angular velocity
 
   // Initialize measurement noise covariance matrix
   Eigen::MatrixXf measurement_noise = Eigen::MatrixXf::Identity(7, 7);
-  measurement_noise.middleRows(0, 3) *= 0.01;   // Position
-  measurement_noise.middleRows(3, 4) *= 0.001;  // Orientation
+  measurement_noise.middleRows(0, 3) *= 1e-4;   // Position
+  measurement_noise.middleRows(3, 4) *= 1e-5;  // Orientation
 
   // Initialize mean vector
   Eigen::VectorXf mean(16);
@@ -75,8 +75,9 @@ PoseEstimator::PoseEstimator(
   odom_process_noise_ = Eigen::MatrixXf::Identity(16, 16);
   odom_process_noise_.middleRows(0, 3) *= 1e-3;    // Position
   odom_process_noise_.middleRows(3, 3) *= 1e-9;    // Velocity
-  odom_process_noise_.middleRows(6, 4) *= 1e-6;    // Orientation
-  odom_process_noise_.middleRows(13, 3) *= 1e-12;  // Angular velocity
+  odom_process_noise_.middleRows(6, 4) *= 1e-3;    // Orientation
+  odom_process_noise_.middleRows(10, 3) *= 1e3;   // Acceleration
+  odom_process_noise_.middleRows(13, 3) *= 1e-9;  // Angular velocity
 
   // Initialize IMU process noise covariance matrix
   imu_process_noise_ = Eigen::MatrixXf::Identity(16, 16);
@@ -180,12 +181,7 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     ROS_WARN_THROTTLE(5.0, "Scan matching fitness score is low (%f). Skip correction.", fitness_score);
     return aligned;
   }
-  double near_fitness_distance = 20.0;
-  double fitness_score_near = registration_->getFitnessScore(near_fitness_distance);
-  if (near_fitness_distance > fitness_reject_) {
-    ROS_WARN_THROTTLE(5.0, "Scan matching near fitness score is low (%f). Skip correction.", fitness_score_near);
-    return aligned;
-  }
+
   double max_probability = 3.3;
   double transform_probability = std::min(1.0, registration_->getTransformationProbability() / max_probability);
   if (transform_probability < 0.1) {
@@ -250,23 +246,12 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   // Fill data
   without_pred_error_ = no_guess.inverse() * trans;
   motion_pred_error_ = init_guess.inverse() * trans;
+  ukf_->correct(observation);
   // Add remaining difference to covavriance
   Eigen::Vector3f linear_err = p_measure - p_measure_smooth;
   Eigen::Quaternionf q_err = q_measure * q_measure_smooth.inverse();
-  // Eigen::MatrixXf registration_measurement_noise = Eigen::MatrixXf::Identity(7, 7);
-  // probability_scaling = std::min(probability_scaling, 0.000001);
-  // registration_measurement_noise.middleRows(0, 3) *= 1e6 * fitness_score / probability_scaling;  // Position
-  // registration_measurement_noise.middleRows(3, 4) *= 1e6  * fitness_score / probability_scaling;  // Orientation
-  // registration_measurement_noise(0, 0) += fabs(linear_err.x());
-  // registration_measurement_noise(1, 1) += fabs(linear_err.y());
-  // registration_measurement_noise(2, 2) += fabs(linear_err.z());
-  // registration_measurement_noise(3, 3) += fabs(q_err.w());
-  // registration_measurement_noise(4, 4) += fabs(q_err.x());
-  // registration_measurement_noise(5, 5) += fabs(q_err.y());
-  // registration_measurement_noise(6, 6) += fabs(q_err.z());
-  // ukf_->setMeasurementNoiseCov(registration_measurement_noise);
   transform_probability = std::max(transform_probability, 1e-6);
-  double covariance = std::max(0.0, 1.0 / transform_probability - 1.0);
+  double covariance = fitness_score + std::max(0.0, 1.0 / transform_probability - 1.0);
   for (int i = 0; i < 36; i++) {
     if (i % 7 == 0) {
       pose_covariance[i] = covariance;
@@ -277,11 +262,7 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   Eigen::Vector3f euler_error = Eigen::Vector3f(q_err.toRotationMatrix().eulerAngles(0, 1, 2));
   pose_covariance[0] += linear_err.x() * linear_err.x();
   pose_covariance[7] += linear_err.y() * linear_err.y();
-  // pose_covariance[14] += fabs(linear_err.z());
-  // pose_covariance[21] += fabs(euler_error.x());
-  // pose_covariance[28] += fabs(euler_error.y());
   pose_covariance[35] += euler_error.z() * euler_error.z();
-  ukf_->correct(observation);
   return aligned;
 }
 
