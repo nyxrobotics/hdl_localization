@@ -75,9 +75,9 @@ PoseEstimator::PoseEstimator(
   odom_process_noise_ = Eigen::MatrixXf::Identity(16, 16);
   odom_process_noise_.middleRows(0, 3) *= 1e-3;    // Position
   odom_process_noise_.middleRows(3, 3) *= 1e-9;    // Velocity
-  odom_process_noise_.middleRows(6, 4) *= 1e-3;    // Orientation
+  odom_process_noise_.middleRows(6, 4) *= 1e-4;    // Orientation
   odom_process_noise_.middleRows(10, 3) *= 1e3;   // Acceleration
-  odom_process_noise_.middleRows(13, 3) *= 1e-9;  // Angular velocity
+  odom_process_noise_.middleRows(13, 3) *= 1e-10;  // Angular velocity
 
   // Initialize IMU process noise covariance matrix
   imu_process_noise_ = Eigen::MatrixXf::Identity(16, 16);
