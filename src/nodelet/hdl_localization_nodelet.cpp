@@ -18,11 +18,11 @@ void HdlLocalizationNodelet::onInit() {
   odom_stamp_last_ = ros::Time::now();
 
   initializeParams();
-  map_frame_ = private_nh_.param<std::string>("map_frame_", "map");
+  map_frame_ = private_nh_.param<std::string>("map_frame", "map");
   odom_frame_ = private_nh_.param<std::string>("odom_frame", "odom");
-  base_frame_ = private_nh_.param<std::string>("base_frame_", "base_link");
+  base_frame_ = private_nh_.param<std::string>("base_frame", "base_link");
 
-  specify_init_pose_ = private_nh_.param<bool>("specify_init_pose_", false);
+  specify_init_pose_ = private_nh_.param<bool>("specify_init_pose", false);
   use_odom_frame_ = private_nh_.param<bool>("use_odom_frame", false);
   if (specify_init_pose_) {
     init_pose_.x() = private_nh_.param<double>("init_pos_x", 0.0);
@@ -35,17 +35,17 @@ void HdlLocalizationNodelet::onInit() {
   } else if (use_odom_frame_) {
     odom_ready_ = false;
     initialize_on_odom_ = private_nh_.param<bool>("initialize_on_odom", true);
-    tf_buffer_.canTransform(map_frame_, odom_frame, ros::Time(0), ros::Duration(1.0));
+    tf_buffer_.canTransform(map_frame_, odom_frame_, ros::Time(0), ros::Duration(1.0));
     if (initialize_on_odom_) {
       if (tf_buffer_.canTransform(map_frame_, base_frame_, ros::Time(0), ros::Duration(10.0))) {
         geometry_msgs::TransformStamped tf_map2base = tf_buffer_.lookupTransform(map_frame_, base_frame_, ros::Time(0), ros::Duration(10.0));
         init_pose_.x() = tf_map2base.transform.translation.x;
         init_pose_.y() = tf_map2base.transform.translation.y;
         init_pose_.z() = tf_map2base.transform.translation.z;
-        init_orientation.x() = tf_map2base.transform.rotation.x;
-        init_orientation.y() = tf_map2base.transform.rotation.y;
-        init_orientation.z() = tf_map2base.transform.rotation.z;
-        init_orientation.w() = tf_map2base.transform.rotation.w;
+        init_orientation_.x() = tf_map2base.transform.rotation.x;
+        init_orientation_.y() = tf_map2base.transform.rotation.y;
+        init_orientation_.z() = tf_map2base.transform.rotation.z;
+        init_orientation_.w() = tf_map2base.transform.rotation.w;
       } else {
         NODELET_ERROR("Lookup transform failed %s -> %s", map_frame_.c_str(), base_frame_.c_str());
         initialize_on_odom_ = false;
@@ -56,7 +56,7 @@ void HdlLocalizationNodelet::onInit() {
   publish_tf_ = private_nh_.param<bool>("publish_tf", true);
   use_imu_ = private_nh_.param<bool>("use_imu", true);
   if (use_odom_frame_ && use_imu_) {
-    NODELET_WARN("[HdlLocalizationNodelet] Both use_odom_frame and use_imu enabled -> disabling use_imu");
+    NODELET_WARN("[HdlLocalizationNodelet] Both use_odom_frame_ and use_imu enabled -> disabling use_imu");
     use_imu_ = false;
   }
   invert_acc_ = private_nh_.param<bool>("invert_acc", false);
@@ -77,9 +77,9 @@ void HdlLocalizationNodelet::onInit() {
   // initialize pose estimator
   NODELET_INFO("initialize pose estimator with specified parameters!!");
   pose_estimator_.reset(new hdl_localization::PoseEstimator(
-    registration,
+    registration_,
     init_pose_,
-    init_orientation,
+    init_orientation_,
     private_nh_.param<double>("cool_time_duration", 0.1),
     private_nh_.param<double>("fitness_reject", 100.0),
     private_nh_.param<double>("fitness_reliable", 1.0),
@@ -92,7 +92,7 @@ void HdlLocalizationNodelet::onInit() {
     imu_sub_ = mt_nh_.subscribe("/gpsimu_driver/imu_data", 5, &HdlLocalizationNodelet::imuCallback, this);
   }
   points_sub_ = mt_nh_.subscribe("/velodyne_points", 5, &HdlLocalizationNodelet::pointsCallback, this);
-  globalmap_sub_ = nh_.subscribe("/globalmap_", 1, &HdlLocalizationNodelet::globalmap_Callback, this);
+  globalmap_sub_ = nh_.subscribe("/globalmap", 1, &HdlLocalizationNodelet::globalmapCallback, this);
   initialpose_sub_ = nh_.subscribe("/initialpose", 5, &HdlLocalizationNodelet::initialposeCallback, this);
 
   pose_pub_ = nh_.advertise<nav_msgs::Odometry>("/odom", 5, false);
@@ -154,7 +154,7 @@ pclomp::NormalDistributionsTransform<HdlLocalizationNodelet::PointT, HdlLocaliza
     //   return ndt;
   }
 
-  NODELET_ERROR_STREAM("unknown registration method:" << reg_method);
+  NODELET_ERROR_STREAM("unknown registration_ method:" << reg_method);
   return nullptr;
 }
 
@@ -164,17 +164,17 @@ void HdlLocalizationNodelet::initializeParams() {
   if (downsample_resolution > 0.0) {
     boost::shared_ptr<pcl::VoxelGrid<HdlLocalizationNodelet::PointT>> voxelgrid(new pcl::VoxelGrid<HdlLocalizationNodelet::PointT>());
     voxelgrid->setLeafSize(downsample_resolution, downsample_resolution, downsample_resolution);
-    downsample_filter = voxelgrid;
+    downsample_filter_ = voxelgrid;
   } else {
-    ROS_WARN("Input downsample_filter is disabled");
-    downsample_filter.reset();
+    ROS_WARN("Input downsample_filter_ is disabled");
+    downsample_filter_.reset();
   }
 
-  NODELET_INFO("create registration method for localization");
-  registration = createRegistration();
+  NODELET_INFO("create registration_ method for localization");
+  registration_ = createRegistration();
 
   // global localization
-  NODELET_INFO("create registration method for fallback during relocalization");
+  NODELET_INFO("create registration_ method for fallback during relocalization");
   relocalizing_ = false;
   delta_estimator_.reset(new DeltaEstimater(createRegistration()));
 }
@@ -185,7 +185,7 @@ void HdlLocalizationNodelet::initializeParams() {
  */
 void HdlLocalizationNodelet::imuCallback(const sensor_msgs::ImuConstPtr& imu_msg) {
   std::lock_guard<std::mutex> lock(imu_data_mutex_);
-  imu_data.push_back(imu_msg);
+  imu_data_.push_back(imu_msg);
 }
 
 /**
@@ -215,7 +215,7 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
   // transform pointcloud into base_frame_
   std::string tf_error;
   pcl::PointCloud<HdlLocalizationNodelet::PointT>::Ptr cloud(new pcl::PointCloud<HdlLocalizationNodelet::PointT>());
-  if (this->tf_buffer_.canTransform(base_frame_, pcl_cloud->header.frame_id, stamp, ros::Duration(0.1), &tfError)) {
+  if (this->tf_buffer_.canTransform(base_frame_, pcl_cloud->header.frame_id, stamp, ros::Duration(0.1), &tf_error)) {
     if (!pcl_ros::transformPointCloud(base_frame_, *pcl_cloud, *cloud, this->tf_buffer_)) {
       NODELET_ERROR("point cloud cannot be transformed into target frame!!");
       return;
@@ -226,7 +226,7 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
   }
 
   auto filtered = downsample(cloud);
-  last_scan = filtered;
+  last_scan_ = filtered;
 
   if (relocalizing_) {
     delta_estimator_->addFrame(filtered);
@@ -242,34 +242,34 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
   if (use_imu_) {
     // PointClouds + IMU prediction
     std::lock_guard<std::mutex> lock(imu_data_mutex_);
-    auto imu_iter = imu_data.begin();
-    for (imu_iter; imu_iter != imu_data.end(); imu_iter++) {
+    auto imu_iter = imu_data_.begin();
+    for (imu_iter; imu_iter != imu_data_.end(); imu_iter++) {
       if (stamp < (*imu_iter)->header.stamp) {
         break;
       }
       const auto& acc = (*imu_iter)->linear_acceleration;
       const auto& gyro = (*imu_iter)->angular_velocity;
-      double acc_sign = invert_acc ? -1.0 : 1.0;
-      double gyro_sign = invert_gyro ? -1.0 : 1.0;
+      double acc_sign = invert_acc_ ? -1.0 : 1.0;
+      double gyro_sign = invert_gyro_ ? -1.0 : 1.0;
       pose_estimator_->predictImu((*imu_iter)->header.stamp, acc_sign * Eigen::Vector3f(acc.x, acc.y, acc.z), gyro_sign * Eigen::Vector3f(gyro.x, gyro.y, gyro.z));
     }
-    imu_data.erase(imu_data.begin(), imu_iter);
+    imu_data_.erase(imu_data_.begin(), imu_iter);
   } else if (use_odom_frame_) {
     if (!odom_ready_) {
       usleep(100000);
-      odom_ready = tf_buffer_.canTransform(map_frame_, odom_frame, ros::Time::now(), ros::Duration(10.0));
+      odom_ready_ = tf_buffer_.canTransform(map_frame_, odom_frame_, ros::Time::now(), ros::Duration(10.0));
       if (!odom_ready_) {
         NODELET_ERROR("Waiting for %s -> %s transform", base_frame_.c_str(), odom_frame_.c_str());
         return;
       }
     }
     // PointClouds + Oodometry prediction
-    if (tf_buffer_.canTransform(base_frame_, odom_stamp_last, base_frame_, ros::Time(0), odom_frame, ros::Duration(0.1))) {
+    if (tf_buffer_.canTransform(base_frame_, odom_stamp_last_, base_frame_, ros::Time(0), odom_frame_, ros::Duration(0.1))) {
       // Get the amount of odometry movement since the last calculation
       // Coordinate system where the front of the robot is x
-      geometry_msgs::TransformStamped odom_delta = tf_buffer_.lookupTransform(base_frame_, odom_stamp_last, base_frame_, ros::Time(0), odom_frame);
+      geometry_msgs::TransformStamped odom_delta = tf_buffer_.lookupTransform(base_frame_, odom_stamp_last_, base_frame_, ros::Time(0), odom_frame_);
       // Get the latest base_frame_ to get the time
-      geometry_msgs::TransformStamped odom_now = tf_buffer_.lookupTransform(odom_frame, base_frame_, ros::Time(0));
+      geometry_msgs::TransformStamped odom_now = tf_buffer_.lookupTransform(odom_frame_, base_frame_, ros::Time(0));
       ros::Time odom_stamp = odom_now.header.stamp;
       ros::Duration odom_time_diff = odom_stamp - odom_stamp_last_;
       double odom_time_diff_sec = odom_time_diff.toSec();
@@ -286,13 +286,13 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
       }
       odom_stamp_last_ = odom_stamp;
     } else {
-      if (tf_buffer_.canTransform(odom_frame, base_frame_, ros::Time(0), ros::Duration(0.1))) {
+      if (tf_buffer_.canTransform(odom_frame_, base_frame_, ros::Time(0), ros::Duration(0.1))) {
         NODELET_WARN_THROTTLE(10.0, "The last timestamp is wrong, skip localization");
         // Get the latest base_frame_ to get the time
-        geometry_msgs::TransformStamped odom_now = tf_buffer_.lookupTransform(odom_frame, base_frame_, ros::Time(0));
-        odom_stamp_last = odom_now.header.stamp;
+        geometry_msgs::TransformStamped odom_now = tf_buffer_.lookupTransform(odom_frame_, base_frame_, ros::Time(0));
+        odom_stamp_last_ = odom_now.header.stamp;
       } else {
-        NODELET_WARN_STREAM("Failed to look up transform between " << cloud->header.frame_id << " and " << odom_frame);
+        NODELET_WARN_STREAM("Failed to look up transform between " << cloud->header.frame_id << " and " << odom_frame_);
       }
     }
   } else {
@@ -310,23 +310,23 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
   }
 
   if (status_pub_.getNumSubscribers()) {
-    publish_scan_matching_status(points_msg->header, aligned);
+    publishScanMatchingStatus(points_msg->header, aligned);
   }
 
-  publish_odometry(points_msg->header.stamp, pose_estimator_->matrix(), pose_covariance);
+  publishOdometry(points_msg->header.stamp, pose_estimator_->matrix(), pose_covariance);
 }
 
 /**
  * @brief callback for globalmap_ input
  * @param points_msg
  */
-void HdlLocalizationNodelet::globalmap_Callback(const sensor_msgs::PointCloud2ConstPtr& points_msg) {
+void HdlLocalizationNodelet::globalmapCallback(const sensor_msgs::PointCloud2ConstPtr& points_msg) {
   NODELET_INFO("globalmap received!");
   pcl::PointCloud<HdlLocalizationNodelet::PointT>::Ptr cloud(new pcl::PointCloud<HdlLocalizationNodelet::PointT>());
   pcl::fromROSMsg(*points_msg, *cloud);
   globalmap_ = cloud;
 
-  registration->setInputTarget(globalmap_);
+  registration_->setInputTarget(globalmap_);
 
   if (use_global_localization_) {
     NODELET_INFO("set globalmap for global localization!");
@@ -346,14 +346,14 @@ void HdlLocalizationNodelet::globalmap_Callback(const sensor_msgs::PointCloud2Co
  * @param
  */
 bool HdlLocalizationNodelet::relocalize(std_srvs::EmptyRequest& req, std_srvs::EmptyResponse& res) {
-  if (last_scan == nullptr) {
+  if (last_scan_ == nullptr) {
     NODELET_INFO_STREAM("no scan has been received");
     return false;
   }
 
   relocalizing_ = true;
   delta_estimator_->reset();
-  pcl::PointCloud<HdlLocalizationNodelet::PointT>::ConstPtr scan = last_scan;
+  pcl::PointCloud<HdlLocalizationNodelet::PointT>::ConstPtr scan = last_scan_;
 
   hdl_global_localization::QueryGlobalLocalization srv;
   pcl::toROSMsg(*scan, srv.request.cloud);
@@ -380,7 +380,7 @@ bool HdlLocalizationNodelet::relocalize(std_srvs::EmptyRequest& req, std_srvs::E
 
   std::lock_guard<std::mutex> lock(pose_estimator_mutex_);
   pose_estimator_.reset(new hdl_localization::PoseEstimator(
-    registration,
+    registration_,
     pose.translation(),
     Eigen::Quaternionf(pose.linear()),
     private_nh_.param<double>("cool_time_duration", 0.1),
@@ -440,17 +440,17 @@ void HdlLocalizationNodelet::initialposeCallback(const geometry_msgs::PoseWithCo
   init_orientation_.z() = q_map2robot.z();
   init_orientation_.w() = q_map2robot.w();
   if (use_odom_frame_) {
-    odom_stamp_last = msg->header.stamp;
+    odom_stamp_last_ = msg->header.stamp;
     odom_ready_ = false;
   }
   if (use_imu_) {
-    imu_data.clear();
+    imu_data_.clear();
   }
   std::lock_guard<std::mutex> lock(pose_estimator_mutex_);
   pose_estimator_.reset(new hdl_localization::PoseEstimator(
-    registration,
+    registration_,
     init_pose_,
-    init_orientation,
+    init_orientation_,
     private_nh_.param<double>("cool_time_duration", 0.1),
     private_nh_.param<double>("fitness_reject", 100.0),
     private_nh_.param<double>("fitness_reliable", 1.0),
@@ -466,13 +466,13 @@ void HdlLocalizationNodelet::initialposeCallback(const geometry_msgs::PoseWithCo
  * @return downsampled cloud
  */
 pcl::PointCloud<HdlLocalizationNodelet::PointT>::ConstPtr HdlLocalizationNodelet::downsample(const pcl::PointCloud<HdlLocalizationNodelet::PointT>::ConstPtr& cloud) const {
-  if (!downsample_filter) {
+  if (!downsample_filter_) {
     return cloud;
   }
 
   pcl::PointCloud<HdlLocalizationNodelet::PointT>::Ptr filtered(new pcl::PointCloud<HdlLocalizationNodelet::PointT>());
-  downsample_filter->setInputCloud(cloud);
-  downsample_filter->filter(*filtered);
+  downsample_filter_->setInputCloud(cloud);
+  downsample_filter_->filter(*filtered);
   filtered->header = cloud->header;
 
   return filtered;
@@ -486,13 +486,13 @@ pcl::PointCloud<HdlLocalizationNodelet::PointT>::ConstPtr HdlLocalizationNodelet
 void HdlLocalizationNodelet::publishOdometry(const ros::Time& stamp, const Eigen::Matrix4f& pose, double pose_covariance[36]) {
   // broadcast the transform over tf
   if (publish_tf_) {
-    if (tf_buffer_.canTransform(odom_frame, base_frame_, ros::Time(0))) {
+    if (tf_buffer_.canTransform(odom_frame_, base_frame_, ros::Time(0))) {
       geometry_msgs::TransformStamped map_wrt_frame = tf2::eigenToTransform(Eigen::Isometry3d(pose.inverse().cast<double>()));
       map_wrt_frame.header.stamp = stamp;
       map_wrt_frame.header.frame_id = base_frame_;
       map_wrt_frame.child_frame_id = map_frame_;
 
-      geometry_msgs::TransformStamped frame_wrt_odom = tf_buffer_.lookupTransform(odom_frame, base_frame_, ros::Time(0), ros::Duration(0.1));
+      geometry_msgs::TransformStamped frame_wrt_odom = tf_buffer_.lookupTransform(odom_frame_, base_frame_, ros::Time(0), ros::Duration(0.1));
       Eigen::Matrix4f frame2odom = tf2::transformToEigen(frame_wrt_odom).cast<float>().matrix();
 
       geometry_msgs::TransformStamped map_wrt_odom;
@@ -506,15 +506,15 @@ void HdlLocalizationNodelet::publishOdometry(const ros::Time& stamp, const Eigen
       odom_trans.transform = tf2::toMsg(odom_wrt_map);
       odom_trans.header.stamp = stamp;
       odom_trans.header.frame_id = map_frame_;
-      odom_trans.child_frame_id = odom_frame;
+      odom_trans.child_frame_id = odom_frame_;
 
-      tf_broadcaster.sendTransform(odom_trans);
+      tf_broadcaster_.sendTransform(odom_trans);
     } else {
       geometry_msgs::TransformStamped odom_trans = tf2::eigenToTransform(Eigen::Isometry3d(pose.cast<double>()));
       odom_trans.header.stamp = stamp;
       odom_trans.header.frame_id = map_frame_;
       odom_trans.child_frame_id = base_frame_;
-      tf_broadcaster.sendTransform(odom_trans);
+      tf_broadcaster_.sendTransform(odom_trans);
     }
   }
 
@@ -549,7 +549,7 @@ void HdlLocalizationNodelet::publishScanMatchingStatus(const std_msgs::Header& h
   ScanMatchingStatus status;
   status.header = header;
 
-  status.has_converged = registration->hasConverged();
+  status.has_converged = registration_->hasConverged();
   status.matching_error = 0.0;
 
   const double max_correspondence_dist = private_nh_.param<double>("status_max_correspondence_dist", 0.5);
@@ -566,7 +566,7 @@ void HdlLocalizationNodelet::publishScanMatchingStatus(const std_msgs::Header& h
     }
     num_valid_points++;
 
-    registration->getSearchMethodTarget()->nearestKSearch(pt, 1, k_indices, k_sq_dists);
+    registration_->getSearchMethodTarget()->nearestKSearch(pt, 1, k_indices, k_sq_dists);
     if (k_sq_dists[0] < max_correspondence_dist * max_correspondence_dist) {
       status.matching_error += k_sq_dists[0];
       num_inliers++;
@@ -575,7 +575,7 @@ void HdlLocalizationNodelet::publishScanMatchingStatus(const std_msgs::Header& h
 
   status.matching_error /= num_inliers;
   status.inlier_fraction = static_cast<float>(num_inliers) / std::max(1, num_valid_points);
-  status.relative_pose = tf2::eigenToTransform(Eigen::Isometry3d(registration->getFinalTransformation().cast<double>())).transform;
+  status.relative_pose = tf2::eigenToTransform(Eigen::Isometry3d(registration_->getFinalTransformation().cast<double>())).transform;
 
   status.prediction_labels.reserve(2);
   status.prediction_errors.reserve(2);
