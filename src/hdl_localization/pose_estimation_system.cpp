@@ -33,7 +33,8 @@ PoseEstimationSystem::VectorX PoseEstimationSystem::computeNextState(const PoseE
 }
 
 // System equation with IMU input
-PoseEstimationSystem::VectorX PoseEstimationSystem::computeNextStateWithIMU(const PoseEstimationSystem::VectorX& current_state, const Eigen::Vector3f& imu_acc, const Eigen::Vector3f& imu_gyro) const {
+PoseEstimationSystem::VectorX
+PoseEstimationSystem::computeNextStateWithIMU(const PoseEstimationSystem::VectorX& current_state, const Eigen::Vector3f& imu_acc, const Eigen::Vector3f& imu_gyro) const {
   PoseEstimationSystem::VectorX next_state(16);
 
   Vector3 pt = current_state.middleRows(0, 3);
@@ -68,7 +69,10 @@ PoseEstimationSystem::VectorX PoseEstimationSystem::computeNextStateWithIMU(cons
 }
 
 // System equation with odometry input
-PoseEstimationSystem::VectorX PoseEstimationSystem::computeNextStateWithOdom(const PoseEstimationSystem::VectorX& current_state, const Eigen::Vector3f& odom_twist_lin, const Eigen::Vector3f& odom_twist_ang) const {
+PoseEstimationSystem::VectorX PoseEstimationSystem::computeNextStateWithOdom(
+  const PoseEstimationSystem::VectorX& current_state,
+  const Eigen::Vector3f& odom_twist_lin,
+  const Eigen::Vector3f& odom_twist_ang) const {
   PoseEstimationSystem::VectorX next_state(16);
   Vector3 pt = current_state.middleRows(0, 3);
   Vector3 vt = current_state.middleRows(3, 3);

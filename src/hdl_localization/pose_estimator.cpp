@@ -58,7 +58,7 @@ PoseEstimator::PoseEstimator(
 
   // Initialize measurement noise covariance matrix
   Eigen::MatrixXf measurement_noise = Eigen::MatrixXf::Identity(7, 7);
-  measurement_noise.middleRows(0, 3) *= 1e-4;   // Position
+  measurement_noise.middleRows(0, 3) *= 1e-4;  // Position
   measurement_noise.middleRows(3, 4) *= 1e-5;  // Orientation
 
   // Initialize mean vector
@@ -76,7 +76,7 @@ PoseEstimator::PoseEstimator(
   odom_process_noise_.middleRows(0, 3) *= 1e-3;    // Position
   odom_process_noise_.middleRows(3, 3) *= 1e-9;    // Velocity
   odom_process_noise_.middleRows(6, 4) *= 1e-4;    // Orientation
-  odom_process_noise_.middleRows(10, 3) *= 1e3;   // Acceleration
+  odom_process_noise_.middleRows(10, 3) *= 1e3;    // Acceleration
   odom_process_noise_.middleRows(13, 3) *= 1e-10;  // Angular velocity
 
   // Initialize IMU process noise covariance matrix
@@ -231,8 +231,8 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   // When fitness_score is large, the gain of correction is reduced
   diff_linear_scaling *= probability_scaling;
   diff_angular_scaling *= probability_scaling;
-  diff_linear_scaling *=  linear_correction_gain_;
-  diff_angular_scaling *=  angular_correction_gain_;
+  diff_linear_scaling *= linear_correction_gain_;
+  diff_angular_scaling *= angular_correction_gain_;
   diff_linear_scaling = std::max(std::min(diff_linear_scaling, 1.0), 0.0);
   diff_angular_scaling = std::max(std::min(diff_angular_scaling, 1.0), 0.0);
   // Add difference to current estimation

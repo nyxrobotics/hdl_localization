@@ -39,33 +39,32 @@ public:
   using PointT = pcl::PointXYZI;
 
   HdlLocalizationNodelet();
-  ~HdlLocalizationNodelet();
+  ~HdlLocalizationNodelet() override;
 
-  void onInit();
+  void onInit() override;
 
 private:
-  pclomp::NormalDistributionsTransform<PointT, PointT>::Ptr create_registration() const;
-  void initialize_params();
+  pclomp::NormalDistributionsTransform<PointT, PointT>::Ptr createRegistration() const;
+  void initializeParams();
 
 private:
   /**
    * @brief callback for imu data
    * @param imu_msg
    */
-  void imu_callback(const sensor_msgs::ImuConstPtr& imu_msg);
+  void imuCallback(const sensor_msgs::ImuConstPtr& imu_msg);
 
   /**
    * @brief callback for point cloud data
    * @param points_msg
    */
-  void points_callback(const sensor_msgs::PointCloud2ConstPtr& points_msg);
-
+  void pointsCallback(const sensor_msgs::PointCloud2ConstPtr& points_msg);
 
   /**
    * @brief callback for globalmap input
    * @param points_msg
    */
-  void globalmap_callback(const sensor_msgs::PointCloud2ConstPtr& points_msg);
+  void globalmapCallback(const sensor_msgs::PointCloud2ConstPtr& points_msg);
 
   /**
    * @brief perform global localization to relocalize the sensor position
@@ -77,7 +76,7 @@ private:
    * @brief callback for initial pose input ("2D Pose Estimate" on rviz)
    * @param pose_msg
    */
-  void initialpose_callback(const geometry_msgs::PoseWithCovarianceStampedConstPtr& msg);
+  void initialposeCallback(const geometry_msgs::PoseWithCovarianceStampedConstPtr& msg);
 
   /**
    * @brief downsampling
@@ -90,69 +89,68 @@ private:
    * @param stamp  timestamp
    * @param pose   odometry pose to be published
    */
-  void publish_odometry(const ros::Time& stamp, const Eigen::Matrix4f& pose, double pose_covariance[36]);
+  void publishOdometry(const ros::Time& stamp, const Eigen::Matrix4f& pose, double pose_covariance[36]);
 
   /**
    * @brief publish scan matching status information
    */
-  void publish_scan_matching_status(const std_msgs::Header& header, pcl::PointCloud<pcl::PointXYZI>::ConstPtr aligned) ;
+  void publishScanMatchingStatus(const std_msgs::Header& header, pcl::PointCloud<pcl::PointXYZI>::ConstPtr aligned);
 
 private:
   // ROS
-  ros::NodeHandle nh;
-  ros::NodeHandle mt_nh;
-  ros::NodeHandle private_nh;
+  ros::NodeHandle nh_;
+  ros::NodeHandle mt_nh_;
+  ros::NodeHandle private_nh_;
 
-  bool use_odom_frame;
-  bool odom_ready;
-  bool initialize_on_odom;
-  bool specify_init_pose;
-  Eigen::Vector3f init_pose;
-  Eigen::Quaternionf init_orientation;
-  ros::Time odom_stamp_last;
-  std::string odom_frame;
-  std::string base_frame;
-  std::string map_frame;
-  bool publish_tf;
+  bool use_odom_frame_;
+  bool odom_ready_;
+  bool initialize_on_odom_;
+  bool specify_init_pose_;
+  Eigen::Vector3f init_pose_;
+  Eigen::Quaternionf init_orientation_;
+  ros::Time odom_stamp_last_;
+  std::string odom_frame_;
+  std::string base_frame_;
+  std::string map_frame_;
+  bool publish_tf_;
 
-  bool use_imu;
-  bool invert_acc;
-  bool invert_gyro;
-  ros::Subscriber imu_sub;
-  ros::Subscriber points_sub;
-  ros::Subscriber globalmap_sub;
-  ros::Subscriber initialpose_sub;
+  bool use_imu_;
+  bool invert_acc_;
+  bool invert_gyro_;
+  ros::Subscriber imu_sub_;
+  ros::Subscriber points_sub_;
+  ros::Subscriber globalmap_sub_;
+  ros::Subscriber initialpose_sub_;
 
-  ros::Publisher pose_pub;
-  ros::Publisher aligned_pub;
-  ros::Publisher status_pub;
+  ros::Publisher pose_pub_;
+  ros::Publisher aligned_pub_;
+  ros::Publisher status_pub_;
 
-  tf2_ros::Buffer tf_buffer;
-  tf2_ros::TransformListener tf_listener;
-  tf2_ros::TransformBroadcaster tf_broadcaster;
+  tf2_ros::Buffer tf_buffer_;
+  tf2_ros::TransformListener tf_listener_;
+  tf2_ros::TransformBroadcaster tf_broadcaster_;
 
   // imu input buffer
-  std::mutex imu_data_mutex;
-  std::vector<sensor_msgs::ImuConstPtr> imu_data;
+  std::mutex imu_data_mutex_;
+  std::vector<sensor_msgs::ImuConstPtr> imu_data_;
 
   // globalmap and registration method
-  pcl::PointCloud<PointT>::Ptr globalmap;
-  pcl::Filter<PointT>::Ptr downsample_filter;
-  pclomp::NormalDistributionsTransform<PointT, PointT>::Ptr registration;
+  pcl::PointCloud<PointT>::Ptr globalmap_;
+  pcl::Filter<PointT>::Ptr downsample_filter_;
+  pclomp::NormalDistributionsTransform<PointT, PointT>::Ptr registration_;
 
   // pose estimator
-  std::mutex pose_estimator_mutex;
-  std::unique_ptr<hdl_localization::PoseEstimator> pose_estimator;
+  std::mutex pose_estimator_mutex_;
+  std::unique_ptr<hdl_localization::PoseEstimator> pose_estimator_;
 
   // global localization
-  bool use_global_localization;
-  std::atomic_bool relocalizing;
-  std::unique_ptr<DeltaEstimater> delta_estimater;
+  bool use_global_localization_;
+  std::atomic_bool relocalizing_;
+  std::unique_ptr<DeltaEstimater> delta_estimater_;
 
-  pcl::PointCloud<PointT>::ConstPtr last_scan;
-  ros::ServiceServer relocalize_server;
-  ros::ServiceClient set_global_map_service;
-  ros::ServiceClient query_global_localization_service;
+  pcl::PointCloud<PointT>::ConstPtr last_scan_;
+  ros::ServiceServer relocalize_server_;
+  ros::ServiceClient set_global_map_service_;
+  ros::ServiceClient query_global_localization_service_;
 };  // namespace hdl_localization
 }  // namespace hdl_localization
-

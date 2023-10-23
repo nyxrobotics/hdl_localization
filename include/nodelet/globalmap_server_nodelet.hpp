@@ -32,25 +32,25 @@ public:
   using PointT = PointXYZRGBI;
 
   GlobalmapServerNodelet();
-  virtual ~GlobalmapServerNodelet();
+  ~GlobalmapServerNodelet() override;
 
   void onInit() override;
 
 private:
-  void initialize_params();
-  void pub_once_cb(const ros::WallTimerEvent& event);
-  void map_update_callback(const std_msgs::String& msg);
+  void initializeParams();
+  void pubOnceCb(const ros::WallTimerEvent& event);
+  void mapUpdateCallback(const std_msgs::String& msg);
 
   // ROS
-  ros::NodeHandle nh;
-  ros::NodeHandle mt_nh;
-  ros::NodeHandle private_nh;
+  ros::NodeHandle nh_;
+  ros::NodeHandle mt_nh_;
+  ros::NodeHandle private_nh_;
 
-  ros::Publisher globalmap_pub;
-  ros::Subscriber map_update_sub;
+  ros::Publisher globalmap_pub_;
+  ros::Subscriber map_update_sub_;
 
-  ros::WallTimer globalmap_pub_timer;
-  pcl::PointCloud<PointT>::Ptr globalmap;
+  ros::WallTimer globalmap_pub_timer_;
+  pcl::PointCloud<PointT>::Ptr globalmap_;
 };
 
 }  // namespace hdl_localization
