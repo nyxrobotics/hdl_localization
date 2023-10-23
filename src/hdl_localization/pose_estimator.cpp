@@ -171,7 +171,7 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
     init_stamp_ = stamp;
   }
   last_correction_stamp_ = stamp;
-  Eigen::Matrix4f no_guess = last_observation_;
+  Eigen::Matrix4f trans_last = last_observation_;
   Eigen::Matrix4f init_guess = matrix();
   pcl::PointCloud<PointT>::Ptr aligned(new pcl::PointCloud<PointT>());
   registration_->setInputSource(cloud);
@@ -193,9 +193,9 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
 
   double probability_scaling = transform_probability;
   double iter_scaling = std::max(std::min(1.0, iter / 30.0), 0.0);
-  Eigen::Matrix4f trans = registration_->getFinalTransformation();
-  Eigen::Vector3f p_measure = trans.block<3, 1>(0, 3);
-  Eigen::Quaternionf q_measure(trans.block<3, 3>(0, 0));
+  Eigen::Matrix4f trans_next = registration_->getFinalTransformation();
+  Eigen::Vector3f p_measure = trans_next.block<3, 1>(0, 3);
+  Eigen::Quaternionf q_measure(trans_next.block<3, 3>(0, 0));
   if (quat().coeffs().dot(q_measure.coeffs()) < 0.0f) {
     q_measure.coeffs() *= -1.0f;
   }
@@ -242,10 +242,10 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   Eigen::VectorXf observation(7);
   observation.middleRows(0, 3) = p_measure_smooth;
   observation.middleRows(3, 4) = Eigen::Vector4f(q_measure_smooth.w(), q_measure_smooth.x(), q_measure_smooth.y(), q_measure_smooth.z());
-  last_observation_ = trans;
+  last_observation_ = trans_next;
   // Fill data
-  without_pred_error_ = no_guess.inverse() * trans;
-  motion_pred_error_ = init_guess.inverse() * trans;
+  without_pred_error_ = trans_last.inverse() * trans_next;
+  motion_pred_error_ = init_guess.inverse() * trans_next;
   ukf_->correct(observation);
   // Add remaining difference to covavriance
   Eigen::Vector3f linear_err = p_measure - p_measure_smooth;
