@@ -528,9 +528,9 @@ void HdlLocalizationNodelet::publishOdometry(const ros::Time& stamp, const Eigen
   odom.pose.covariance[0] = private_nh_.param<double>("cov_scaling_factor_x", 1.0) * pose_covariance[0];
   odom.pose.covariance[7] = private_nh_.param<double>("cov_scaling_factor_y", 1.0) * pose_covariance[7];
   odom.pose.covariance[14] = private_nh_.param<double>("cov_scaling_factor_z", 1.0) * pose_covariance[14];
-  odom.pose.covariance[21] = private_nh_.param<double>("cov_scaling_factor_R", 1.0) * pose_covariance[21];
-  odom.pose.covariance[28] = private_nh_.param<double>("cov_scaling_factor_P", 1.0) * pose_covariance[28];
-  odom.pose.covariance[35] = private_nh_.param<double>("cov_scaling_factor_Y", 1.0) * pose_covariance[35];
+  odom.pose.covariance[21] = private_nh_.param<double>("cov_scaling_factor_roll", 1.0) * pose_covariance[21];
+  odom.pose.covariance[28] = private_nh_.param<double>("cov_scaling_factor_pitch", 1.0) * pose_covariance[28];
+  odom.pose.covariance[35] = private_nh_.param<double>("cov_scaling_factor_yaw", 1.0) * pose_covariance[35];
 
   odom.twist.twist.linear.x = 0.0;
   odom.twist.twist.linear.y = 0.0;
