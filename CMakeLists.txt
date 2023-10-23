@@ -101,7 +101,7 @@ include_directories(include)
 include_directories(${catkin_INCLUDE_DIRS})
 
 # nodelets
-add_library(hdl_localization_nodelet src/hdl_localization/pose_estimator.cpp src/nodelet/hdl_localization_nodelet.cpp)
+add_library(hdl_localization_nodelet src/hdl_localization/pose_estimator.cpp src/hdl_localization/pose_estimation_system.cpp src/nodelet/hdl_localization_nodelet.cpp)
 target_link_libraries(
   hdl_localization_nodelet
   ${catkin_LIBRARIES}
