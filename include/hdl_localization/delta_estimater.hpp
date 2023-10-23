@@ -11,38 +11,14 @@ class DeltaEstimater {
 public:
   using PointT = pcl::PointXYZI;
 
-  DeltaEstimater(pcl::Registration<PointT, PointT>::Ptr reg) : delta_(Eigen::Isometry3f::Identity()), reg_(reg) {}
-  ~DeltaEstimater() {}
+  DeltaEstimater(pcl::Registration<PointT, PointT>::Ptr reg);
+  ~DeltaEstimater();
 
-  void reset() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    delta_.setIdentity();
-    last_frame_.reset();
-  }
+  void reset();
 
-  void addFrame(pcl::PointCloud<PointT>::ConstPtr frame) {
-    std::unique_lock<std::mutex> lock(mutex_);
-    if (last_frame_ == nullptr) {
-      last_frame_ = frame;
-      return;
-    }
+  void addFrame(pcl::PointCloud<PointT>::ConstPtr frame);
 
-    reg_->setInputTarget(last_frame_);
-    reg_->setInputSource(frame);
-    lock.unlock();
-
-    pcl::PointCloud<PointT> aligned;
-    reg_->align(aligned);
-
-    lock.lock();
-    last_frame_ = frame;
-    delta_ = delta_ * Eigen::Isometry3f(reg_->getFinalTransformation());
-  }
-
-  Eigen::Isometry3f estimatedDelta() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return delta_;
-  }
+  Eigen::Isometry3f estimatedDelta() const;
 
 private:
   mutable std::mutex mutex_;
