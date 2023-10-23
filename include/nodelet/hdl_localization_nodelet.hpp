@@ -39,8 +39,7 @@ public:
   using PointT = pcl::PointXYZI;
 
   HdlLocalizationNodelet();
-  ~HdlLocalizationNodelet() override;
-
+  virtual ~HdlLocalizationNodelet();
   void onInit() override;
 
 private:
