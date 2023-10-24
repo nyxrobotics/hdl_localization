@@ -1,6 +1,5 @@
 #include <hdl_localization/pose_estimator.hpp>
 
-
 namespace hdl_localization {
 
 /**
@@ -47,46 +46,46 @@ PoseEstimator::PoseEstimator(
   last_observation_ = initial_pose;
 
   // Initialize process noise covariance matrix
-  process_noise_ = Eigen::MatrixXf::Identity(16, 16);
-  process_noise_.middleRows(0, 3) *= 1.0;    // Position
-  process_noise_.middleRows(3, 3) *= 1.0;    // Velocity
-  process_noise_.middleRows(6, 4) *= 1.0;    // Orientation
-  process_noise_.middleRows(10, 3) *= 1e-6;  // Acceleration
-  process_noise_.middleRows(13, 3) *= 1e-6;  // Angular velocity
+  process_noise_ = Eigen::MatrixXf::Identity(STATE_SIZE, STATE_SIZE);
+  process_noise_.middleRows(StateMemberX, 3) *= 1.0;       // Position
+  process_noise_.middleRows(StateMemberVx, 3) *= 1.0;      // Velocity
+  process_noise_.middleRows(StateMemberQw, 4) *= 1.0;      // Orientation
+  process_noise_.middleRows(StateMemberAx, 3) *= 1e-6;     // Acceleration
+  process_noise_.middleRows(StateMemberVroll, 3) *= 1e-6;  // Angular velocity
 
   // Initialize measurement noise covariance matrix
-  Eigen::MatrixXf measurement_noise = Eigen::MatrixXf::Identity(7, 7);
-  measurement_noise.middleRows(0, 3) *= 1e-4;  // Position
-  measurement_noise.middleRows(3, 4) *= 1e-5;  // Orientation
+  Eigen::MatrixXf measurement_noise = Eigen::MatrixXf::Identity(MEASUREMENT_SIZE, MEASUREMENT_SIZE);
+  measurement_noise.middleRows(MeasurementMemberX, 3) *= 1e-4;  // Position
+  measurement_noise.middleRows(MeasurementMemberQw, 4) *= 1e-5;  // Orientation
 
   // Initialize mean vector
-  Eigen::VectorXf mean(16);
-  mean.middleRows(0, 3) = initial_position;
-  mean.middleRows(3, 3).setZero();
-  mean.middleRows(6, 4) = Eigen::Vector4f(initial_orientation.w(), initial_orientation.x(), initial_orientation.y(), initial_orientation.z()).normalized();
-  mean.middleRows(10, 3).setZero();
-  mean.middleRows(13, 3).setZero();
+  Eigen::VectorXf mean(STATE_SIZE);
+  mean.middleRows(StateMemberX, 3) = initial_position;
+  mean.middleRows(StateMemberVx, 3).setZero();
+  mean.middleRows(StateMemberQw, 4) = Eigen::Vector4f(initial_orientation.w(), initial_orientation.x(), initial_orientation.y(), initial_orientation.z()).normalized();
+  mean.middleRows(StateMemberAx, 3).setZero();
+  mean.middleRows(StateMemberVroll, 3).setZero();
 
   // TODO: Change odom covariance constants to ROS params
   // or subscribe an odometry topic and use its covariance
   // Initialize odometry process noise covariance matrix
-  odom_process_noise_ = Eigen::MatrixXf::Identity(16, 16);
-  odom_process_noise_.middleRows(0, 3) *= 1e-3;    // Position
-  odom_process_noise_.middleRows(3, 3) *= 1e-9;    // Velocity
-  odom_process_noise_.middleRows(6, 4) *= 1e-4;    // Orientation
-  odom_process_noise_.middleRows(10, 3) *= 1e3;    // Acceleration
-  odom_process_noise_.middleRows(13, 3) *= 1e-10;  // Angular velocity
+  odom_process_noise_ = Eigen::MatrixXf::Identity(STATE_SIZE, STATE_SIZE);
+  odom_process_noise_.middleRows(StateMemberX, 3) *= 1e-3;    // Position
+  odom_process_noise_.middleRows(StateMemberVx, 3) *= 1e-9;    // Velocity
+  odom_process_noise_.middleRows(StateMemberQw, 4) *= 1e-4;    // Orientation
+  odom_process_noise_.middleRows(StateMemberAx, 3) *= 1e3;    // Acceleration
+  odom_process_noise_.middleRows(StateMemberVroll, 3) *= 1e-10;  // Angular velocity
 
   // Initialize IMU process noise covariance matrix
-  imu_process_noise_ = Eigen::MatrixXf::Identity(16, 16);
-  imu_process_noise_.middleRows(6, 4) *= 0.5;    // Orientation
-  imu_process_noise_.middleRows(10, 3) *= 1e-6;  // Acceleration
-  imu_process_noise_.middleRows(13, 3) *= 1e-6;  // Angular velocity
+  imu_process_noise_ = Eigen::MatrixXf::Identity(STATE_SIZE, STATE_SIZE);
+  imu_process_noise_.middleRows(StateMemberQw, 4) *= 0.5;    // Orientation
+  imu_process_noise_.middleRows(StateMemberAx, 3) *= 1e-6;  // Acceleration
+  imu_process_noise_.middleRows(StateMemberVroll, 3) *= 1e-6;  // Angular velocity
 
   // Initialize covariance matrix
-  Eigen::MatrixXf cov = Eigen::MatrixXf::Identity(16, 16) * 0.01;
+  Eigen::MatrixXf cov = Eigen::MatrixXf::Identity(STATE_SIZE, STATE_SIZE) * 0.01;
   PoseEstimationSystem system;
-  ukf_.reset(new kkl::alg::UnscentedKalmanFilterX<float, PoseEstimationSystem>(system, 16, 7, process_noise_, measurement_noise, mean, cov));
+  ukf_.reset(new kkl::alg::UnscentedKalmanFilterX<float, PoseEstimationSystem>(system, STATE_SIZE, MEASUREMENT_SIZE, process_noise_, measurement_noise, mean, cov));
 }
 
 /**
@@ -108,11 +107,10 @@ void PoseEstimator::predict(const ros::Time& stamp) {
     prev_stamp_ = stamp;
     return;
   }
-  double dt = (stamp - prev_stamp_).toSec();
+  double time_delta = (stamp - prev_stamp_).toSec();
   prev_stamp_ = stamp;
-  ukf_->setProcessNoiseCov(process_noise_ * dt);
-  ukf_->system_.time_step_ = dt;
-  ukf_->predict();
+  ukf_->setProcessNoiseCov(process_noise_ * time_delta);
+  ukf_->predict(time_delta);
 }
 
 /**
@@ -129,11 +127,10 @@ void PoseEstimator::predictImu(const ros::Time& stamp, const Eigen::Vector3f& im
     prev_stamp_ = stamp;
     return;
   }
-  double dt = (stamp - prev_stamp_).toSec();
+  double time_delta = (stamp - prev_stamp_).toSec();
   prev_stamp_ = stamp;
-  ukf_->setProcessNoiseCov(imu_process_noise_ * dt);
-  ukf_->system_.time_step_ = dt;
-  ukf_->predictImu(imu_acc, imu_gyro);
+  ukf_->setProcessNoiseCov(imu_process_noise_ * time_delta);
+  ukf_->predictImu(imu_acc, imu_gyro, time_delta);
 }
 
 /**
@@ -150,11 +147,10 @@ void PoseEstimator::predictOdom(const ros::Time& stamp, const Eigen::Vector3f& o
     prev_stamp_ = stamp;
     return;
   }
-  double dt = (stamp - prev_stamp_).toSec();
+  double time_delta = (stamp - prev_stamp_).toSec();
   prev_stamp_ = stamp;
-  ukf_->setProcessNoiseCov(odom_process_noise_ * dt);
-  ukf_->system_.time_step_ = dt;
-  ukf_->predictOdom(odom_twist_linear, odom_twist_angular);
+  ukf_->setProcessNoiseCov(odom_process_noise_ * time_delta);
+  ukf_->predictOdom(odom_twist_linear, odom_twist_angular, time_delta);
 }
 
 /**
@@ -199,7 +195,7 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   }
   // Get current estimation pose
   Eigen::Vector3f p_estimate = ukf_->mean_.head<3>();
-  Eigen::Quaternionf q_estimate(ukf_->mean_[6], ukf_->mean_[7], ukf_->mean_[8], ukf_->mean_[9]);
+  Eigen::Quaternionf q_estimate(ukf_->mean_[StateMemberQw], ukf_->mean_[StateMemberQx], ukf_->mean_[StateMemberQy], ukf_->mean_[StateMemberQz]);
   // If the value is unreliable, the correction is reduced
   double diff_linear_scaling = transform_probability;
   double diff_angular_scaling = transform_probability;
@@ -238,8 +234,8 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
   Eigen::Quaternionf q_measure_smooth = q_estimate.slerp(diff_angular_scaling, q_measure);
   // Update kalman filter
   Eigen::VectorXf observation(7);
-  observation.middleRows(0, 3) = p_measure_smooth;
-  observation.middleRows(3, 4) = Eigen::Vector4f(q_measure_smooth.w(), q_measure_smooth.x(), q_measure_smooth.y(), q_measure_smooth.z());
+  observation.middleRows(MeasurementMemberX, 3) = p_measure_smooth;
+  observation.middleRows(MeasurementMemberQw, 4) = Eigen::Vector4f(q_measure_smooth.w(), q_measure_smooth.x(), q_measure_smooth.y(), q_measure_smooth.z());
   last_observation_ = trans_next;
   // Fill data
   without_pred_error_ = trans_last.inverse() * trans_next;
@@ -278,7 +274,7 @@ ros::Time PoseEstimator::lastCorrectionTime() const {
  * @return Estimated position as a vector
  */
 Eigen::Vector3f PoseEstimator::pos() const {
-  return Eigen::Vector3f(ukf_->mean_[0], ukf_->mean_[1], ukf_->mean_[2]);
+  return Eigen::Vector3f(ukf_->mean_[StateMemberX], ukf_->mean_[StateMemberY], ukf_->mean_[StateMemberZ]);
 }
 
 /**
@@ -286,7 +282,7 @@ Eigen::Vector3f PoseEstimator::pos() const {
  * @return Estimated velocity as a vector
  */
 Eigen::Vector3f PoseEstimator::vel() const {
-  return Eigen::Vector3f(ukf_->mean_[3], ukf_->mean_[4], ukf_->mean_[5]);
+  return Eigen::Vector3f(ukf_->mean_[StateMemberVx], ukf_->mean_[StateMemberVy], ukf_->mean_[StateMemberVz]);
 }
 
 /**
@@ -294,7 +290,7 @@ Eigen::Vector3f PoseEstimator::vel() const {
  * @return Estimated orientation as a quaternion
  */
 Eigen::Quaternionf PoseEstimator::quat() const {
-  return Eigen::Quaternionf(ukf_->mean_[6], ukf_->mean_[7], ukf_->mean_[8], ukf_->mean_[9]).normalized();
+  return Eigen::Quaternionf(ukf_->mean_[StateMemberQw], ukf_->mean_[StateMemberQx], ukf_->mean_[StateMemberQy], ukf_->mean_[StateMemberQz]).normalized();
 }
 
 /**

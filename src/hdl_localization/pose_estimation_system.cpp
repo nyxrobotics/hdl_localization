@@ -2,110 +2,115 @@
 
 namespace hdl_localization {
 
-PoseEstimationSystem::PoseEstimationSystem() {
-  time_step_ = 0.01;
-}
+PoseEstimationSystem::PoseEstimationSystem() {}
 
 // System equation (without input)
-PoseEstimationSystem::VectorX PoseEstimationSystem::computeNextState(const PoseEstimationSystem::VectorX& current_state) const {
-  PoseEstimationSystem::VectorX next_state(16);
-
-  Vector3 position = current_state.middleRows(0, 3);
-  Vector3 velocity = current_state.middleRows(3, 3);
-  Quaternion quaternion(current_state[6], current_state[7], current_state[8], current_state[9]);
-  quaternion.normalize();
-
-  Vector3 acceleration_bias = current_state.middleRows(10, 3);
-  Vector3 angular_velocity_bias = current_state.middleRows(13, 3);
-
-  // Update position
-  next_state.middleRows(0, 3) = position + velocity * time_step_;
-
-  // Update velocity
-  next_state.middleRows(3, 3) = velocity;
-
+// state = [X, Y, Z, Qw, Qx, Qy, Qz, Vx, Vy, Vz, Vroll, Vpitch, Vyaw, Ax, Ay, Az]
+PoseEstimationSystem::VectorX PoseEstimationSystem::predictNextState(const PoseEstimationSystem::VectorX& current_state, double time_delta) const {
+  Eigen::VectorXf next_state(STATE_SIZE);
+  next_state = current_state;
+  Eigen::Vector3f position = current_state.middleRows(StateMemberX, 3);
+  Eigen::Vector3f velocity = current_state.middleRows(StateMemberVx, 3);
+  Eigen::Vector3f acceleration = current_state.middleRows(StateMemberAx, 3);
+  Eigen::Vector3f angular_velocity = current_state.middleRows(StateMemberVroll, 3);
   // Update orientation
-  next_state.middleRows(6, 4) << quaternion.w(), quaternion.x(), quaternion.y(), quaternion.z();
-  next_state.middleRows(10, 3) = current_state.middleRows(10, 3);  // Constant bias on acceleration
-  next_state.middleRows(13, 3) = current_state.middleRows(13, 3);  // Constant bias on angular velocity
-
+  Eigen::Quaternionf angle_quaternion(current_state[StateMemberQw], current_state[StateMemberQx], current_state[StateMemberQy], current_state[StateMemberQz]);
+  Eigen::Quaternionf angle_quaternion_delta;
+  angle_quaternion_delta = Eigen::AngleAxisf(angular_velocity[0] * time_delta, Eigen::Vector3f::UnitX()) *
+                           Eigen::AngleAxisf(angular_velocity[1] * time_delta, Eigen::Vector3f::UnitY()) *
+                           Eigen::AngleAxisf(angular_velocity[2] * time_delta, Eigen::Vector3f::UnitZ());
+  Eigen::Quaternionf angle_quaternion_next = angle_quaternion_delta * angle_quaternion;
+  // Update velocity
+  Eigen::Vector3f velocity_next = velocity + acceleration * time_delta;
+  // Update position
+  Eigen::Matrix3f rotation_matrix = angle_quaternion.toRotationMatrix();
+  Eigen::Matrix3f rotation_matrix_next = angle_quaternion_next.toRotationMatrix();
+  Eigen::Vector3f position_next = position + rotation_matrix * (time_delta / 2.0 * velocity) + rotation_matrix_next * (time_delta / 2.0 * velocity_next);
+  next_state.middleRows(StateMemberX, 3) = position_next;
+  angle_quaternion_next.normalize();
+  next_state.middleRows(StateMemberQw, 4) << angle_quaternion_next.w(), angle_quaternion_next.x(), angle_quaternion_next.y(), angle_quaternion_next.z();
+  next_state.middleRows(StateMemberVx, 3) = velocity_next;
   return next_state;
 }
 
 // System equation with IMU input
-PoseEstimationSystem::VectorX
-PoseEstimationSystem::computeNextStateWithIMU(const PoseEstimationSystem::VectorX& current_state, const Eigen::Vector3f& imu_acc, const Eigen::Vector3f& imu_gyro) const {
-  PoseEstimationSystem::VectorX next_state(16);
-
-  Vector3 pt = current_state.middleRows(0, 3);
-  Vector3 vt = current_state.middleRows(3, 3);
-  Quaternion qt(current_state[6], current_state[7], current_state[8], current_state[9]);
-  qt.normalize();
-
-  Vector3 acc_bias = current_state.middleRows(10, 3);
-  Vector3 gyro_bias = current_state.middleRows(13, 3);
-
-  // Position
-  Vector3 next_pt = pt + vt * time_step_;
-  next_state.middleRows(0, 3) = next_pt;
-
-  // Velocity (vel_z = 0);
-  Vector3 g(0.0f, 0.0f, 9.80665f);
-  Vector3 acc = qt * (imu_acc - acc_bias - g);
-  Vector3 next_vt = vt + acc * time_step_;
-  next_vt.z() = 0.0f;
-  next_state.middleRows(3, 3) = next_vt;
-
-  // Orientation
-  Vector3 gyro = imu_gyro - gyro_bias;
-  Quaternion dq(1, gyro.x() * time_step_, gyro.y() * time_step_, gyro.z() * time_step_);
-  dq.normalize();
-  Quaternion next_qt = (qt * dq).normalized();
-  next_state.middleRows(6, 4) << next_qt.w(), next_qt.x(), next_qt.y(), next_qt.z();
-  next_state.middleRows(10, 3) = current_state.middleRows(10, 3);  // Constant bias on acceleration
-  next_state.middleRows(13, 3) = current_state.middleRows(13, 3);  // Constant bias on angular velocity
-
+// state = [X, Y, Z, Qw, Qx, Qy, Qz, Vx, Vy, Vz, Vroll, Vpitch, Vyaw, Ax, Ay, Az]
+PoseEstimationSystem::VectorX PoseEstimationSystem::predictNextStateWithIMU(
+  const PoseEstimationSystem::VectorX& current_state,
+  const Eigen::Vector3f& imu_acc,
+  const Eigen::Vector3f& imu_gyro,
+  double time_delta) const {
+  Eigen::VectorXf next_state(STATE_SIZE);
+  next_state = current_state;
+  Eigen::Vector3f position = current_state.middleRows(StateMemberX, 3);
+  Eigen::Vector3f velocity = current_state.middleRows(StateMemberVx, 3);
+  Eigen::Vector3f acceleration = current_state.middleRows(StateMemberAx, 3);
+  Eigen::Vector3f angular_velocity = current_state.middleRows(StateMemberVroll, 3);
+  // Update orientation
+  Eigen::Vector3f angular_velocity_next(imu_gyro.x(), imu_gyro.y(), imu_gyro.z());
+  Eigen::Quaternionf angle_quaternion(current_state[StateMemberQw], current_state[StateMemberQx], current_state[StateMemberQy], current_state[StateMemberQz]);
+  Eigen::Quaternionf angle_quaternion_delta;
+  angle_quaternion_delta = Eigen::AngleAxisf(angular_velocity_next.x() * time_delta, Eigen::Vector3f::UnitX()) *
+                           Eigen::AngleAxisf(angular_velocity_next.y() * time_delta, Eigen::Vector3f::UnitY()) *
+                           Eigen::AngleAxisf(angular_velocity_next.z() * time_delta, Eigen::Vector3f::UnitZ());
+  Eigen::Quaternionf angle_quaternion_next = angle_quaternion_delta * angle_quaternion;
+  // Update velocity
+  Eigen::Vector3f acceleration_next(imu_acc.x(), imu_acc.y(), imu_acc.z() - 9.80665f);
+  Eigen::Vector3f velocity_next = velocity + acceleration_next * time_delta;
+  // Update position
+  Eigen::Matrix3f rotation_matrix = angle_quaternion.toRotationMatrix();
+  Eigen::Matrix3f rotation_matrix_next = angle_quaternion_next.toRotationMatrix();
+  Eigen::Vector3f position_next = position + rotation_matrix * (time_delta / 2.0 * velocity) + rotation_matrix_next * (time_delta / 2.0 * velocity_next);
+  next_state.middleRows(StateMemberX, 3) = position_next;
+  angle_quaternion_next.normalize();
+  next_state.middleRows(StateMemberQw, 4) << angle_quaternion_next.w(), angle_quaternion_next.x(), angle_quaternion_next.y(), angle_quaternion_next.z();
+  next_state.middleRows(StateMemberVx, 3) = velocity_next;
+  next_state.middleRows(StateMemberVroll, 3) = angular_velocity_next;
+  next_state.middleRows(StateMemberAx, 3) = acceleration_next;
   return next_state;
 }
 
 // System equation with odometry input
-PoseEstimationSystem::VectorX PoseEstimationSystem::computeNextStateWithOdom(
+PoseEstimationSystem::VectorX PoseEstimationSystem::predictNextStateWithOdom(
   const PoseEstimationSystem::VectorX& current_state,
   const Eigen::Vector3f& odom_twist_lin,
-  const Eigen::Vector3f& odom_twist_ang) const {
-  PoseEstimationSystem::VectorX next_state(16);
-  Vector3 pt = current_state.middleRows(0, 3);
-  Vector3 vt = current_state.middleRows(3, 3);
-  Quaternion qt(current_state[6], current_state[7], current_state[8], current_state[9]);
-  qt.normalize();
-
-  const Vector3& raw_lin_vel = odom_twist_lin;
-  Vector3 raw_ang_vel = odom_twist_ang;
-
-  // Position
-  next_state.middleRows(0, 3) = pt + vt * time_step_;
-
-  // Velocity (vel_z = 0);
-  Vector3 vel = qt * raw_lin_vel;
-  vel.z() = 0.0f;
-  next_state.middleRows(3, 3) = vel;
-
-  // Orientation
-  Quaternion dq(1, raw_ang_vel[0] * time_step_ / 2.0, raw_ang_vel[1] * time_step_ / 2.0, raw_ang_vel[2] * time_step_ / 2.0);
-  dq.normalize();
-  Quaternion next_qt = (qt * dq).normalized();
-  next_state.middleRows(6, 4) << next_qt.w(), next_qt.x(), next_qt.y(), next_qt.z();
-  next_state.middleRows(10, 3) = current_state.middleRows(10, 3);  // Constant bias on acceleration
-  next_state.middleRows(13, 3) = current_state.middleRows(13, 3);  // Constant bias on angular velocity
+  const Eigen::Vector3f& odom_twist_ang,
+  double time_delta) const {
+  Eigen::VectorXf next_state(STATE_SIZE);
+  next_state = current_state;
+  Eigen::Vector3f position = current_state.middleRows(StateMemberX, 3);
+  Eigen::Vector3f velocity = current_state.middleRows(StateMemberVx, 3);
+  Eigen::Vector3f acceleration = current_state.middleRows(StateMemberAx, 3);
+  Eigen::Vector3f angular_velocity = current_state.middleRows(StateMemberVroll, 3);
+  // Update orientation
+  Eigen::Vector3f angular_velocity_next(odom_twist_ang.x(), odom_twist_ang.y(), odom_twist_ang.z());
+  Eigen::Quaternionf angle_quaternion(current_state[StateMemberQw], current_state[StateMemberQx], current_state[StateMemberQy], current_state[StateMemberQz]);
+  Eigen::Quaternionf angle_quaternion_delta;
+  angle_quaternion_delta = Eigen::AngleAxisf(angular_velocity_next.x() * time_delta, Eigen::Vector3f::UnitX()) *
+                           Eigen::AngleAxisf(angular_velocity_next.y() * time_delta, Eigen::Vector3f::UnitY()) *
+                           Eigen::AngleAxisf(angular_velocity_next.z() * time_delta, Eigen::Vector3f::UnitZ());
+  Eigen::Quaternionf angle_quaternion_next = angle_quaternion_delta * angle_quaternion;
+  // Update velocity
+  Eigen::Vector3f velocity_next = odom_twist_lin;
+  Eigen::Vector3f acceleration_next = (velocity_next - velocity) / time_delta;
+  // Update position
+  Eigen::Matrix3f rotation_matrix = angle_quaternion.toRotationMatrix();
+  Eigen::Matrix3f rotation_matrix_next = angle_quaternion_next.toRotationMatrix();
+  Eigen::Vector3f position_next = position + rotation_matrix * (time_delta / 2.0 * velocity_next) + rotation_matrix_next * (time_delta / 2.0 * velocity_next);
+  next_state.middleRows(StateMemberX, 3) = position_next;
+  angle_quaternion_next.normalize();
+  next_state.middleRows(StateMemberQw, 4) << angle_quaternion_next.w(), angle_quaternion_next.x(), angle_quaternion_next.y(), angle_quaternion_next.z();
+  next_state.middleRows(StateMemberVx, 3) = velocity_next;
+  next_state.middleRows(StateMemberVroll, 3) = angular_velocity_next;
+  next_state.middleRows(StateMemberAx, 3) = acceleration_next;
   return next_state;
 }
 
 // Observation equation
 PoseEstimationSystem::VectorX PoseEstimationSystem::computeObservation(const PoseEstimationSystem::VectorX& current_state) const {
-  PoseEstimationSystem::VectorX observation(7);
-  observation.middleRows(0, 3) = current_state.middleRows(0, 3);
-  observation.middleRows(3, 4) = current_state.middleRows(6, 4).normalized();
-
+  PoseEstimationSystem::VectorX observation(MEASUREMENT_SIZE);
+  observation.middleRows(MeasurementMemberX, 3) = current_state.middleRows(StateMemberX, 3);
+  observation.middleRows(MeasurementMemberQw, 4) = current_state.middleRows(MeasurementMemberQw, 4).normalized();
   return observation;
 }
 

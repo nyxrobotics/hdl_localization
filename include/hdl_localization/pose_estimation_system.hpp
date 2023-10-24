@@ -5,6 +5,38 @@
 #include <ukf/unscented_kalman_filter.hpp>
 
 namespace hdl_localization {
+const int STATE_SIZE = 16;
+enum StateMembers
+{
+  StateMemberX = 0,
+  StateMemberY,
+  StateMemberZ,
+  StateMemberQw,
+  StateMemberQx,
+  StateMemberQy,
+  StateMemberQz,
+  StateMemberVx,
+  StateMemberVy,
+  StateMemberVz,
+  StateMemberVroll,
+  StateMemberVpitch,
+  StateMemberVyaw,
+  StateMemberAx,
+  StateMemberAy,
+  StateMemberAz
+};
+const int MEASUREMENT_SIZE = 7;
+enum MeasurementMembers
+{
+  MeasurementMemberX = 0,
+  MeasurementMemberY,
+  MeasurementMemberZ,
+  MeasurementMemberQw,
+  MeasurementMemberQx,
+  MeasurementMemberQy,
+  MeasurementMemberQz
+};
+
 
 class PoseEstimationSystem {
 public:
@@ -14,11 +46,10 @@ public:
   typedef Eigen::Quaternion<float> Quaternion;
 
 public:
-  double time_step_;
   PoseEstimationSystem();
-  VectorX computeNextState(const VectorX& current_state) const;
-  VectorX computeNextStateWithIMU(const VectorX& current_state, const Eigen::Vector3f& imu_acc, const Eigen::Vector3f& imu_gyro) const;
-  VectorX computeNextStateWithOdom(const VectorX& current_state, const Eigen::Vector3f& odom_twist_lin, const Eigen::Vector3f& odom_twist_ang) const;
+  VectorX predictNextState(const VectorX& current_state, double time_delta) const;
+  VectorX predictNextStateWithIMU(const VectorX& current_state, const Eigen::Vector3f& imu_acc, const Eigen::Vector3f& imu_gyro, double time_delta) const;
+  VectorX predictNextStateWithOdom(const VectorX& current_state, const Eigen::Vector3f& odom_twist_lin, const Eigen::Vector3f& odom_twist_ang, double time_delta) const;
   VectorX computeObservation(const VectorX& current_state) const;
 };
 

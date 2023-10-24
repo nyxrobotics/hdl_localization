@@ -72,15 +72,15 @@ public:
 
   /**
    * @brief predict
-   * @note state = [px, py, pz, vx, vy, vz, qw, qx, qy, qz, 0, 0, 0, 0, 0, 0]
+   * @note state = [X, Y, Z, Qw, Qx, Qy, Qz, Vx, Vy, Vz, Vroll, Vpitch, Vyaw, Ax, Ay, Az]
    */
-  void predict() {
+  void predict(double time_delta) {
     // calculate sigma points
     ensurePositiveFinite(cov_);
     computeSigmaPoints(mean_, cov_, sigma_points_);
 
     for (int i = 0; i < sigma_points_samples_; i++) {
-      sigma_points_.row(i) = system_.computeNextState(sigma_points_.row(i));
+      sigma_points_.row(i) = system_.predictNextState(sigma_points_.row(i),time_delta);
     }
 
     const auto& r = process_noise_;
@@ -111,15 +111,15 @@ public:
    * @brief predict
    * @param imu_acc      acceleration
    * @param imu_gyro     angular velocity
-   * @note state = [px, py, pz, vx, vy, vz, qw, qx, qy, qz, acc_bias_x, acc_bias_y, acc_bias_z, gyro_bias_x, gyro_bias_y, gyro_bias_z]
+   * @note state = [X, Y, Z, Qw, Qx, Qy, Qz, Vx, Vy, Vz, Vroll, Vpitch, Vyaw, Ax, Ay, Az]
    */
-  void predictImu(const Eigen::Vector3f& imu_acc, const Eigen::Vector3f& imu_gyro) {
+  void predictImu(const Eigen::Vector3f& imu_acc, const Eigen::Vector3f& imu_gyro,double time_delta) {
     // calculate sigma points
     ensurePositiveFinite(cov_);
     computeSigmaPoints(mean_, cov_, sigma_points_);
 
     for (int i = 0; i < sigma_points_samples_; i++) {
-      sigma_points_.row(i) = system_.computeNextStateWithIMU(sigma_points_.row(i), imu_acc, imu_gyro);
+      sigma_points_.row(i) = system_.predictNextStateWithIMU(sigma_points_.row(i), imu_acc, imu_gyro,time_delta);
     }
 
     const auto& r = process_noise_;
@@ -150,15 +150,15 @@ public:
    * @brief predict
    * @param odom_twist_linear Velocity with x axis in front of the robot
    * @param odom_twist_angular angular velocity
-   * @note state = [px, py, pz, vx, vy, vz, qw, qx, qy, qz, 0, 0, 0, 0, 0, 0]
+   * @note state = [X, Y, Z, Qw, Qx, Qy, Qz, Vx, Vy, Vz, Vroll, Vpitch, Vyaw, Ax, Ay, Az]
    */
-  void predictOdom(const Eigen::Vector3f& odom_twist_linear, const Eigen::Vector3f& odom_twist_angular) {
+  void predictOdom(const Eigen::Vector3f& odom_twist_linear, const Eigen::Vector3f& odom_twist_angular,double time_delta) {
     // calculate sigma points
     ensurePositiveFinite(cov_);
     computeSigmaPoints(mean_, cov_, sigma_points_);
 
     for (int i = 0; i < sigma_points_samples_; i++) {
-      sigma_points_.row(i) = system_.computeNextStateWithOdom(sigma_points_.row(i), odom_twist_linear, odom_twist_angular);
+      sigma_points_.row(i) = system_.predictNextStateWithOdom(sigma_points_.row(i), odom_twist_linear, odom_twist_angular,time_delta);
     }
 
     const auto& r = process_noise_;
