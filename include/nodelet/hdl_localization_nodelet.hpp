@@ -1,6 +1,3 @@
-#ifndef HDL_LOCALIZATION_NODELET_H
-#define HDL_LOCALIZATION_NODELET_H
-
 #include <mutex>
 #include <memory>
 #include <iostream>
@@ -44,11 +41,10 @@ public:
 
   HdlLocalizationNodelet();
   ~HdlLocalizationNodelet() override;
-
   void onInit() override;
 
 private:
-  pcl::Registration<PointT, PointT>::Ptr createRegistration() const;
+  pclomp::NormalDistributionsTransform<PointT, PointT>::Ptr createRegistration() const;
   void initializeParams();
   void imuCallback(const sensor_msgs::ImuConstPtr& imu_msg);
   void pointsCallback(const sensor_msgs::PointCloud2ConstPtr& points_msg);
@@ -56,7 +52,7 @@ private:
   bool relocalize(std_srvs::EmptyRequest& req, std_srvs::EmptyResponse& res);
   void initialposeCallback(const geometry_msgs::PoseWithCovarianceStampedConstPtr& pose_msg);
   pcl::PointCloud<PointT>::ConstPtr downsample(const pcl::PointCloud<PointT>::ConstPtr& cloud) const;
-  void publishOdometry(const ros::Time& stamp, const Eigen::Matrix4f& pose, const double fitness_score);
+  void publishOdometry(const ros::Time& stamp, const Eigen::Matrix4f& pose, double pose_covariance[36]);
   void publishScanMatchingStatus(const std_msgs::Header& header, pcl::PointCloud<pcl::PointXYZI>::ConstPtr aligned);
 
 private:
@@ -65,11 +61,17 @@ private:
   ros::NodeHandle mt_nh_;
   ros::NodeHandle private_nh_;
 
-  bool use_odom_;
+  bool use_odom_frame_;
+  bool odom_ready_;
+  bool initialize_on_odom_;
+  bool specify_init_pose_;
+  Eigen::Vector3f init_pose_;
+  Eigen::Quaternionf init_orientation_;
   ros::Time odom_stamp_last_;
-  std::string robot_odom_frame_id_;
-  std::string odom_child_frame_id_;
-  bool enable_tf_;
+  std::string odom_frame_;
+  std::string base_frame_;
+  std::string map_frame_;
+  bool publish_tf_;
 
   bool use_imu_;
   bool invert_acc_;
@@ -91,10 +93,10 @@ private:
   std::mutex imu_data_mutex_;
   std::vector<sensor_msgs::ImuConstPtr> imu_data_;
 
-  // globalmap_ and registration method
+  // globalmap and registration method
   pcl::PointCloud<PointT>::Ptr globalmap_;
   pcl::Filter<PointT>::Ptr downsample_filter_;
-  pcl::Registration<PointT, PointT>::Ptr registration_;
+  pclomp::NormalDistributionsTransform<PointT, PointT>::Ptr registration_;
 
   // pose estimator
   std::mutex pose_estimator_mutex_;
@@ -109,7 +111,5 @@ private:
   ros::ServiceServer relocalize_server_;
   ros::ServiceClient set_global_map_service_;
   ros::ServiceClient query_global_localization_service_;
-};
+};  // namespace hdl_localization
 }  // namespace hdl_localization
-
-#endif  // HDL_LOCALIZATION_NODELET_H

@@ -79,12 +79,19 @@ void GlobalmapServerNodelet::mapUpdateCallback(const std_msgs::String& msg)
   globalmap_->header.frame_id = "map";
   // downsample globalmap
   double downsample_resolution = private_nh_.param<double>("downsample_resolution", 0.1);
-  boost::shared_ptr<pcl::VoxelGrid<PointT>> voxelgrid(new pcl::VoxelGrid<PointT>());
-  voxelgrid->setLeafSize(downsample_resolution, downsample_resolution, downsample_resolution);
-  voxelgrid->setInputCloud(globalmap_);
-  pcl::PointCloud<PointT>::Ptr filtered(new pcl::PointCloud<PointT>());
-  voxelgrid->filter(*filtered);
-  globalmap_ = filtered;
+  if (downsample_resolution > 0)
+  {
+    boost::shared_ptr<pcl::VoxelGrid<PointT>> voxelgrid(new pcl::VoxelGrid<PointT>());
+    voxelgrid->setLeafSize(downsample_resolution, downsample_resolution, downsample_resolution);
+    voxelgrid->setInputCloud(globalmap_);
+    pcl::PointCloud<PointT>::Ptr filtered(new pcl::PointCloud<PointT>());
+    voxelgrid->filter(*filtered);
+    globalmap_ = filtered;
+  }
+  else
+  {
+    ROS_WARN("Globalmap will not be downsampled");
+  }
   globalmap_pub_.publish(globalmap_);
 }
 
