@@ -69,6 +69,7 @@ private:
   std::string odom_frame_id_;
   std::string base_frame_id_;
   bool tf_broadcast_;
+  double cool_time_duration_;
 
   bool use_odom_;
   bool initialize_on_odom_;
