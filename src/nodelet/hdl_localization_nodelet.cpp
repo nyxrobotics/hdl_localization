@@ -4,6 +4,11 @@ namespace hdl_localization
 {
 HdlLocalizationNodelet::HdlLocalizationNodelet() : tf_buffer_(), tf_listener_(tf_buffer_)
 {
+  init_pose_.setZero();
+  init_orientation_.x() = 0.0;
+  init_orientation_.y() = 0.0;
+  init_orientation_.z() = 0.0;
+  init_orientation_.w() = 1.0;
 }
 
 HdlLocalizationNodelet::~HdlLocalizationNodelet()
@@ -32,6 +37,48 @@ void HdlLocalizationNodelet::onInit()
   }
   invert_acc_ = private_nh_.param<bool>("invert_acc", false);
   invert_gyro_ = private_nh_.param<bool>("invert_gyro", false);
+
+  specify_init_pose_ = private_nh_.param<bool>("specify_init_pose", false);
+  if (specify_init_pose_)
+  {
+    init_pose_.x() = private_nh_.param<double>("init_pos_x", 0.0);
+    init_pose_.y() = private_nh_.param<double>("init_pos_y", 0.0);
+    init_pose_.z() = private_nh_.param<double>("init_pos_z", 0.0);
+    init_orientation_.x() = private_nh_.param<double>("init_ori_x", 0.0);
+    init_orientation_.y() = private_nh_.param<double>("init_ori_y", 0.0);
+    init_orientation_.z() = private_nh_.param<double>("init_ori_z", 0.0);
+    init_orientation_.w() = private_nh_.param<double>("init_ori_w", 1.0);
+  }
+  else if (use_odom_)
+  {
+    odom_ready_ = false;
+    initialize_on_odom_ = private_nh_.param<bool>("initialize_on_odom", true);
+    tf_buffer_.canTransform(global_frame_id_, odom_frame_id_, ros::Time(0), ros::Duration(1.0));
+    if (initialize_on_odom_)
+    {
+      if (tf_buffer_.canTransform(global_frame_id_, base_frame_id_, ros::Time(0), ros::Duration(10.0)))
+      {
+        geometry_msgs::TransformStamped tf_map2base =
+            tf_buffer_.lookupTransform(global_frame_id_, base_frame_id_, ros::Time(0), ros::Duration(10.0));
+        init_pose_.x() = tf_map2base.transform.translation.x;
+        init_pose_.y() = tf_map2base.transform.translation.y;
+        init_pose_.z() = tf_map2base.transform.translation.z;
+        init_orientation_.x() = tf_map2base.transform.rotation.x;
+        init_orientation_.y() = tf_map2base.transform.rotation.y;
+        init_orientation_.z() = tf_map2base.transform.rotation.z;
+        init_orientation_.w() = tf_map2base.transform.rotation.w;
+      }
+      else
+      {
+        NODELET_ERROR("Lookup transform failed %s -> %s", global_frame_id_.c_str(), base_frame_id_.c_str());
+        initialize_on_odom_ = false;
+      }
+    }
+  }
+  // initialize pose estimator
+  NODELET_INFO("initialize pose estimator with specified parameters!!");
+  pose_estimator_.reset(new hdl_localization::PoseEstimator(registration_, init_pose_, init_orientation_,
+                                                            private_nh_.param<double>("cool_time_duration", 0.1)));
   if (use_imu_)
   {
     NODELET_INFO("enable imu-based prediction");
@@ -53,13 +100,15 @@ void HdlLocalizationNodelet::onInit()
     ros::service::waitForService("/hdl_global_localization/set_global_map");
     ros::service::waitForService("/hdl_global_localization/query");
 
-    set_global_map_service_ = nh_.serviceClient<hdl_global_localization::SetGlobalMap>("/hdl_global_localization/"
-                                                                                       "set_global_map");
-    query_global_localization_service_ = nh_.serviceClient<hdl_global_localization::QueryGlobalLocalization>("/hdl_"
-                                                                                                             "global_"
-                                                                                                             "localiz"
-                                                                                                             "ation/"
-                                                                                                             "query");
+    set_global_map_service_ = nh_.serviceClient<hdl_global_localization::SetGlobalMap>(
+        "/hdl_global_localization/"
+        "set_global_map");
+    query_global_localization_service_ = nh_.serviceClient<hdl_global_localization::QueryGlobalLocalization>(
+        "/hdl_"
+        "global_"
+        "localiz"
+        "ation/"
+        "query");
 
     relocalize_server_ = nh_.advertiseService("/relocalize", &HdlLocalizationNodelet::relocalize, this);
   }
@@ -171,19 +220,6 @@ void HdlLocalizationNodelet::initializeParams()
   NODELET_INFO("create registration method for fallback during relocalization");
   relocalizing_ = false;
   delta_estimator_.reset(new DeltaEstimator(createRegistration()));
-
-  // initialize pose estimator
-  if (private_nh_.param<bool>("specify_init_pose", true))
-  {
-    NODELET_INFO("initialize pose estimator with specified parameters!!");
-    pose_estimator_.reset(new hdl_localization::PoseEstimator(
-        registration_,
-        Eigen::Vector3f(private_nh_.param<double>("init_pos_x", 0.0), private_nh_.param<double>("init_pos_y", 0.0),
-                        private_nh_.param<double>("init_pos_z", 0.0)),
-        Eigen::Quaternionf(private_nh_.param<double>("init_ori_w", 1.0), private_nh_.param<double>("init_ori_x", 0.0),
-                           private_nh_.param<double>("init_ori_y", 0.0), private_nh_.param<double>("init_ori_z", 0.0)),
-        private_nh_.param<double>("cool_time_duration", 0.5)));
-  }
 }
 
 /**

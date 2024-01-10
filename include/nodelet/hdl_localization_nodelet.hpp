@@ -69,13 +69,21 @@ private:
   std::string odom_frame_id_;
   std::string base_frame_id_;
   bool tf_broadcast_;
+
   bool use_odom_;
+  bool initialize_on_odom_;
+  bool odom_ready_;
   ros::Time odom_stamp_last_;
+
+  bool specify_init_pose_;
+  Eigen::Vector3f init_pose_;
+  Eigen::Quaternionf init_orientation_;
 
   bool use_imu_;
   bool invert_acc_;
   bool invert_gyro_;
   ros::Subscriber imu_sub_;
+
   ros::Subscriber points_sub_;
   ros::Subscriber globalmap_sub_;
   ros::Subscriber initialpose_sub_;
