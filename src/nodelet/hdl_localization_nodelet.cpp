@@ -2,7 +2,7 @@
 
 namespace hdl_localization
 {
-HdlLocalizationNodelet::HdlLocalizationNodelet() : tf_buffer_(), tf_listener_(tf_buffer_)
+HdlLocalizationNodelet::HdlLocalizationNodelet() : tf_buffer_(), tf_listener_(tf_buffer_), odom_ready_(false)
 {
   init_pose_.setZero();
   init_orientation_.x() = 0.0;
@@ -33,13 +33,19 @@ void HdlLocalizationNodelet::onInit()
   use_imu_ = private_nh_.param<bool>("use_imu", true);
   if (use_odom_ && use_imu_)
   {
-    NODELET_WARN("[HdlLocalizationNodelet] Both use_odom and use_imu enabled -> disabling use_imu");
+    NODELET_WARN("Both use_odom and use_imu enabled, disabling use_imu");
     use_imu_ = false;
   }
   invert_acc_ = private_nh_.param<bool>("invert_acc", false);
   invert_gyro_ = private_nh_.param<bool>("invert_gyro", false);
 
   specify_init_pose_ = private_nh_.param<bool>("specify_init_pose", false);
+  init_with_tf_ = private_nh_.param<bool>("init_with_tf", true);
+  if (specify_init_pose_ && init_with_tf_)
+  {
+    NODELET_WARN("Both specify_init_pose and init_with_tf enabled, disabling init_with_tf");
+    init_with_tf_ = false;
+  }
   if (specify_init_pose_)
   {
     init_pose_.x() = private_nh_.param<double>("init_pos_x", 0.0);
@@ -50,52 +56,53 @@ void HdlLocalizationNodelet::onInit()
     init_orientation_.z() = private_nh_.param<double>("init_ori_z", 0.0);
     init_orientation_.w() = private_nh_.param<double>("init_ori_w", 1.0);
   }
-  else if (use_odom_)
+  else if (init_with_tf_)
   {
-    odom_ready_ = false;
-    initialize_on_odom_ = private_nh_.param<bool>("initialize_on_odom", true);
-    if (initialize_on_odom_)
+    if (!tf_broadcast_ && tf_buffer_.canTransform(global_frame_id_, base_frame_id_, ros::Time(0), ros::Duration(10.0)))
     {
-      if (tf_buffer_.canTransform(global_frame_id_, base_frame_id_, ros::Time(0), ros::Duration(10.0)))
-      {
-        // If global frame and base frame already exist, initial position is set to keep the relative position
-        geometry_msgs::TransformStamped tf_map2base =
-            tf_buffer_.lookupTransform(global_frame_id_, base_frame_id_, ros::Time(0));
-        init_pose_ = Eigen::Vector3f(tf_map2base.transform.translation.x, tf_map2base.transform.translation.y,
-                                     tf_map2base.transform.translation.z);
-        init_orientation_ = Eigen::Quaternionf(tf_map2base.transform.rotation.w, tf_map2base.transform.rotation.x,
-                                               tf_map2base.transform.rotation.y, tf_map2base.transform.rotation.z);
-      }
-      else if (tf_buffer_.canTransform(odom_frame_id_, base_frame_id_, ros::Time(0), ros::Duration(10.0)))
-      {
-        // If there is no global frame, also check the odom frame
-        geometry_msgs::TransformStamped tf_odom2base =
-            tf_buffer_.lookupTransform(odom_frame_id_, base_frame_id_, ros::Time(0));
-        init_pose_ = Eigen::Vector3f(tf_odom2base.transform.translation.x, tf_odom2base.transform.translation.y,
-                                     tf_odom2base.transform.translation.z);
-        init_orientation_ = Eigen::Quaternionf(tf_odom2base.transform.rotation.w, tf_odom2base.transform.rotation.x,
-                                               tf_odom2base.transform.rotation.y, tf_odom2base.transform.rotation.z);
-      }
-      else
-      {
-        NODELET_ERROR("Lookup transform failed %s or %s -> %s", global_frame_id_.c_str(), odom_frame_id_.c_str(),
-                      base_frame_id_.c_str());
-        initialize_on_odom_ = false;
-      }
+      // If global frame and base frame already exist, initial position is set to keep the relative position
+      geometry_msgs::TransformStamped tf_map2base =
+          tf_buffer_.lookupTransform(global_frame_id_, base_frame_id_, ros::Time(0));
+      init_pose_ = Eigen::Vector3f(tf_map2base.transform.translation.x, tf_map2base.transform.translation.y,
+                                   tf_map2base.transform.translation.z);
+      init_orientation_ = Eigen::Quaternionf(tf_map2base.transform.rotation.w, tf_map2base.transform.rotation.x,
+                                             tf_map2base.transform.rotation.y, tf_map2base.transform.rotation.z);
+      NODELET_INFO("global frame(%s) and base frame(%s) exist, use them for initial pose", global_frame_id_.c_str(),
+                   base_frame_id_.c_str());
+    }
+    else if (use_odom_ && tf_buffer_.canTransform(odom_frame_id_, base_frame_id_, ros::Time(0), ros::Duration(10.0)))
+    {
+      // If there is no global frame, also check the odom frame
+      geometry_msgs::TransformStamped tf_odom2base =
+          tf_buffer_.lookupTransform(odom_frame_id_, base_frame_id_, ros::Time(0));
+      init_pose_ = Eigen::Vector3f(tf_odom2base.transform.translation.x, tf_odom2base.transform.translation.y,
+                                   tf_odom2base.transform.translation.z);
+      init_orientation_ = Eigen::Quaternionf(tf_odom2base.transform.rotation.w, tf_odom2base.transform.rotation.x,
+                                             tf_odom2base.transform.rotation.y, tf_odom2base.transform.rotation.z);
+      NODELET_INFO("global frame(%s) does not exist, use odom frame(%s) instead", global_frame_id_.c_str(),
+                   odom_frame_id_.c_str());
+    }
+    else
+    {
+      NODELET_WARN("global frame(%s) and odom frame(%s) do not exist, disabling init_with_tf", global_frame_id_.c_str(),
+                   odom_frame_id_.c_str());
+      init_with_tf_ = false;
     }
   }
-  // initialize pose estimator
+  // Initialize pose estimator
   NODELET_INFO("initialize pose estimator with specified parameters!!");
   pose_estimator_.reset(
       new hdl_localization::PoseEstimator(registration_, init_pose_, init_orientation_, cool_time_duration_));
+
+  // Initialize subscriber and publisher
   if (use_imu_)
   {
     NODELET_INFO("enable imu-based prediction");
-    imu_sub_ = mt_nh_.subscribe("/gpsimu_driver/imu_data", 256, &HdlLocalizationNodelet::imuCallback, this);
+    imu_sub_ = mt_nh_.subscribe("/gpsimu_driver/imu_data", 5, &HdlLocalizationNodelet::imuCallback, this);
   }
   points_sub_ = mt_nh_.subscribe("/velodyne_points", 5, &HdlLocalizationNodelet::pointsCallback, this);
   globalmap_sub_ = nh_.subscribe("/globalmap", 1, &HdlLocalizationNodelet::globalmapCallback, this);
-  initialpose_sub_ = nh_.subscribe("/initialpose", 8, &HdlLocalizationNodelet::initialposeCallback, this);
+  initialpose_sub_ = nh_.subscribe("/initialpose", 1, &HdlLocalizationNodelet::initialposeCallback, this);
 
   pose_pub_ = nh_.advertise<nav_msgs::Odometry>("/odom", 5, false);
   aligned_pub_ = nh_.advertise<sensor_msgs::PointCloud2>("/aligned_points", 5, false);
@@ -280,7 +287,7 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
   }
   else
   {
-    NODELET_ERROR_STREAM(tf_error.c_str());
+    NODELET_ERROR_STREAM("TF transform failed," << tf_error.c_str());
     return;
   }
 
@@ -295,7 +302,7 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
   std::lock_guard<std::mutex> estimator_lock(pose_estimator_mutex_);
   if (!pose_estimator_)
   {
-    NODELET_ERROR("waiting for initial pose input!!");
+    NODELET_ERROR_THROTTLE(10.0, "Waiting for initial pose input");
     return;
   }
   Eigen::Matrix4f before = pose_estimator_->matrix();
@@ -422,7 +429,7 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
  */
 void HdlLocalizationNodelet::globalmapCallback(const sensor_msgs::PointCloud2ConstPtr& points_msg)
 {
-  NODELET_INFO("globalmap received!");
+  NODELET_INFO("Globalmap received");
   pcl::PointCloud<HdlLocalizationNodelet::PointT>::Ptr cloud(new pcl::PointCloud<HdlLocalizationNodelet::PointT>());
   pcl::fromROSMsg(*points_msg, *cloud);
   globalmap_ = cloud;
@@ -504,7 +511,7 @@ bool HdlLocalizationNodelet::relocalize(std_srvs::EmptyRequest& /*req*/, std_srv
  */
 void HdlLocalizationNodelet::initialposeCallback(const geometry_msgs::PoseWithCovarianceStampedConstPtr& msg)
 {
-  NODELET_INFO("[hdl_localization] initial pose received");
+  NODELET_INFO("initialpose received");
   // initialize tf_global2rviz on origin
   geometry_msgs::TransformStamped tf_global2rviz;
   tf_global2rviz.transform.translation.x = 0.0;
@@ -515,15 +522,14 @@ void HdlLocalizationNodelet::initialposeCallback(const geometry_msgs::PoseWithCo
   tf_global2rviz.transform.rotation.z = 0.0;
   tf_global2rviz.transform.rotation.w = 1.0;
   // If the origin of rviz and the global(map) frame are different, coordinate transformation is performed
-  if (initialize_on_odom_ && global_frame_id_ != msg->header.frame_id && !global_frame_id_.empty() &&
+  if (init_with_tf_ && global_frame_id_ != msg->header.frame_id && !global_frame_id_.empty() &&
       !msg->header.frame_id.empty())
   {
     tf_global2rviz =
         tf_buffer_.lookupTransform(global_frame_id_, msg->header.frame_id, ros::Time(0), ros::Duration(1.0));
     if (tf_global2rviz.header.frame_id != global_frame_id_)
     {
-      ROS_ERROR("[hdl_localization] Failed to get transform from %s to %s", global_frame_id_.c_str(),
-                msg->header.frame_id.c_str());
+      ROS_ERROR("[Failed to get transform from %s to %s", global_frame_id_.c_str(), msg->header.frame_id.c_str());
     }
   }
   tf2::Vector3 vec_rviz2robot(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
@@ -698,23 +704,26 @@ void HdlLocalizationNodelet::publishScanMatchingStatus(const std_msgs::Header& h
         tf2::eigenToTransform(Eigen::Isometry3d(pose_estimator_->woPredictionError().get().cast<double>())).transform);
   }
 
-  if (pose_estimator_->imuPredictionError())
+  if (pose_estimator_->motionPredictionError())
   {
     status.prediction_labels.push_back(std_msgs::String());
-    status.prediction_labels.back().data = use_imu_ ? "imu" : "motion_model";
-    status.prediction_errors.push_back(
-        tf2::eigenToTransform(Eigen::Isometry3d(pose_estimator_->imuPredictionError().get().cast<double>())).transform);
-  }
+    if (use_imu_)
+    {
+      status.prediction_labels.back().data = "imu";
+    }
+    else if (use_odom_)
+    {
+      status.prediction_labels.back().data = "odom";
+    }
+    else
+    {
+      status.prediction_labels.back().data = "motion_model";
+    }
 
-  if (pose_estimator_->odomPredictionError())
-  {
-    status.prediction_labels.push_back(std_msgs::String());
-    status.prediction_labels.back().data = "odom";
     status.prediction_errors.push_back(
-        tf2::eigenToTransform(Eigen::Isometry3d(pose_estimator_->odomPredictionError().get().cast<double>()))
+        tf2::eigenToTransform(Eigen::Isometry3d(pose_estimator_->motionPredictionError().get().cast<double>()))
             .transform);
   }
-
   status_pub_.publish(status);
 }
 

@@ -172,8 +172,7 @@ pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Ti
 
   wo_pred_error_ = no_guess.inverse() * registration_->getFinalTransformation();
   ukf_->correct(observation);
-  imu_pred_error_ = init_guess.inverse() * registration_->getFinalTransformation();
-  odom_pred_error_ = imu_pred_error_;
+  motion_pred_error_ = init_guess.inverse() * registration_->getFinalTransformation();
 
   return aligned;
 }
@@ -212,13 +211,8 @@ const boost::optional<Eigen::Matrix4f>& PoseEstimator::woPredictionError() const
   return wo_pred_error_;
 }
 
-const boost::optional<Eigen::Matrix4f>& PoseEstimator::imuPredictionError() const
+const boost::optional<Eigen::Matrix4f>& PoseEstimator::motionPredictionError() const
 {
-  return imu_pred_error_;
-}
-
-const boost::optional<Eigen::Matrix4f>& PoseEstimator::odomPredictionError() const
-{
-  return odom_pred_error_;
+  return motion_pred_error_;
 }
 }  // namespace hdl_localization

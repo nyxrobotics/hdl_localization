@@ -72,7 +72,7 @@ private:
   double cool_time_duration_;
 
   bool use_odom_;
-  bool initialize_on_odom_;
+  bool init_with_tf_;
   bool odom_ready_;
   ros::Time odom_stamp_last_;
 
