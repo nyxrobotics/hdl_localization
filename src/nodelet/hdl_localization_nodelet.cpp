@@ -58,29 +58,23 @@ void HdlLocalizationNodelet::onInit()
     {
       if (tf_buffer_.canTransform(global_frame_id_, base_frame_id_, ros::Time(0), ros::Duration(10.0)))
       {
-        // If there is already a global frame, it is set to the initial position
+        // If global frame and base frame already exist, initial position is set to keep the relative position
         geometry_msgs::TransformStamped tf_map2base =
             tf_buffer_.lookupTransform(global_frame_id_, base_frame_id_, ros::Time(0));
-        init_pose_.x() = tf_map2base.transform.translation.x;
-        init_pose_.y() = tf_map2base.transform.translation.y;
-        init_pose_.z() = tf_map2base.transform.translation.z;
-        init_orientation_.x() = tf_map2base.transform.rotation.x;
-        init_orientation_.y() = tf_map2base.transform.rotation.y;
-        init_orientation_.z() = tf_map2base.transform.rotation.z;
-        init_orientation_.w() = tf_map2base.transform.rotation.w;
+        init_pose_ = Eigen::Vector3f(tf_map2base.transform.translation.x, tf_map2base.transform.translation.y,
+                                     tf_map2base.transform.translation.z);
+        init_orientation_ = Eigen::Quaternionf(tf_map2base.transform.rotation.w, tf_map2base.transform.rotation.x,
+                                               tf_map2base.transform.rotation.y, tf_map2base.transform.rotation.z);
       }
       else if (tf_buffer_.canTransform(odom_frame_id_, base_frame_id_, ros::Time(0), ros::Duration(10.0)))
       {
-        // If there is an odom frame, set this to the initial position
+        // If there is no global frame, also check the odom frame
         geometry_msgs::TransformStamped tf_odom2base =
             tf_buffer_.lookupTransform(odom_frame_id_, base_frame_id_, ros::Time(0));
-        init_pose_.x() = tf_odom2base.transform.translation.x;
-        init_pose_.y() = tf_odom2base.transform.translation.y;
-        init_pose_.z() = tf_odom2base.transform.translation.z;
-        init_orientation_.x() = tf_odom2base.transform.rotation.x;
-        init_orientation_.y() = tf_odom2base.transform.rotation.y;
-        init_orientation_.z() = tf_odom2base.transform.rotation.z;
-        init_orientation_.w() = tf_odom2base.transform.rotation.w;
+        init_pose_ = Eigen::Vector3f(tf_odom2base.transform.translation.x, tf_odom2base.transform.translation.y,
+                                     tf_odom2base.transform.translation.z);
+        init_orientation_ = Eigen::Quaternionf(tf_odom2base.transform.rotation.w, tf_odom2base.transform.rotation.x,
+                                               tf_odom2base.transform.rotation.y, tf_odom2base.transform.rotation.z);
       }
       else
       {
@@ -511,6 +505,7 @@ bool HdlLocalizationNodelet::relocalize(std_srvs::EmptyRequest& /*req*/, std_srv
 void HdlLocalizationNodelet::initialposeCallback(const geometry_msgs::PoseWithCovarianceStampedConstPtr& msg)
 {
   NODELET_INFO("[hdl_localization] initial pose received");
+  // initialize tf_global2rviz on origin
   geometry_msgs::TransformStamped tf_global2rviz;
   tf_global2rviz.transform.translation.x = 0.0;
   tf_global2rviz.transform.translation.y = 0.0;
@@ -520,7 +515,8 @@ void HdlLocalizationNodelet::initialposeCallback(const geometry_msgs::PoseWithCo
   tf_global2rviz.transform.rotation.z = 0.0;
   tf_global2rviz.transform.rotation.w = 1.0;
   // If the origin of rviz and the global(map) frame are different, coordinate transformation is performed
-  if (global_frame_id_ != msg->header.frame_id && !global_frame_id_.empty() && !msg->header.frame_id.empty())
+  if (initialize_on_odom_ && global_frame_id_ != msg->header.frame_id && !global_frame_id_.empty() &&
+      !msg->header.frame_id.empty())
   {
     tf_global2rviz =
         tf_buffer_.lookupTransform(global_frame_id_, msg->header.frame_id, ros::Time(0), ros::Duration(1.0));
@@ -540,13 +536,9 @@ void HdlLocalizationNodelet::initialposeCallback(const geometry_msgs::PoseWithCo
                                 tf_global2rviz.transform.rotation.z, tf_global2rviz.transform.rotation.w);
   tf2::Vector3 vec_global2robot = vec_global2rviz + (tf2::Matrix3x3(q_global2rviz) * vec_rviz2robot);
   tf2::Quaternion q_global2robot = q_global2rviz * q_rviz2robot;
-  init_pose_.x() = vec_global2robot.x();
-  init_pose_.y() = vec_global2robot.y();
-  init_pose_.z() = vec_global2robot.z();
-  init_orientation_.x() = q_global2robot.x();
-  init_orientation_.y() = q_global2robot.y();
-  init_orientation_.z() = q_global2robot.z();
-  init_orientation_.w() = q_global2robot.w();
+  init_pose_ = Eigen::Vector3f(vec_global2robot.x(), vec_global2robot.y(), vec_global2robot.z());
+  init_orientation_ =
+      Eigen::Quaternionf(q_global2robot.w(), q_global2robot.x(), q_global2robot.y(), q_global2robot.z());
   if (use_odom_)
   {
     odom_stamp_last_ = msg->header.stamp;
