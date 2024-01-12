@@ -57,6 +57,7 @@ find_package(
              ndt_omp
              fast_gicp
              hdl_global_localization
+             robot_localization
 )
 
 find_package(
@@ -89,6 +90,7 @@ generate_messages(DEPENDENCIES std_msgs geometry_msgs)
 ###################################
 catkin_package(
   INCLUDE_DIRS include
+  CATKIN_DEPENDS roscpp robot_localization
   #  LIBRARIES hdl_scan_matching_odometry
   #  CATKIN_DEPENDS pcl_ros roscpp sensor_msgs
   #  DEPENDS system_lib
@@ -97,8 +99,7 @@ catkin_package(
 ###########
 ## Build ##
 ###########
-include_directories(include)
-include_directories(${catkin_INCLUDE_DIRS})
+include_directories(include ${catkin_INCLUDE_DIRS})
 
 # nodelets
 add_library(
