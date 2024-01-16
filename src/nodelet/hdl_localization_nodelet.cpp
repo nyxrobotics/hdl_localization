@@ -91,8 +91,18 @@ void HdlLocalizationNodelet::onInit()
   }
   // Initialize pose estimator
   NODELET_INFO("initialize pose estimator with specified parameters!!");
+  geometry_msgs::PoseWithCovarianceStamped initial_pose;
+  initial_pose.header.frame_id = global_frame_id_;
+  initial_pose.header.stamp = ros::Time::now();
+  initial_pose.pose.pose.position.x = init_pose_.x();
+  initial_pose.pose.pose.position.y = init_pose_.y();
+  initial_pose.pose.pose.position.z = init_pose_.z();
+  initial_pose.pose.pose.orientation.x = init_orientation_.x();
+  initial_pose.pose.pose.orientation.y = init_orientation_.y();
+  initial_pose.pose.pose.orientation.z = init_orientation_.z();
+  initial_pose.pose.pose.orientation.w = init_orientation_.w();
   pose_estimator_.reset(
-      new hdl_localization::PoseEstimator(registration_, init_pose_, init_orientation_, cool_time_duration_));
+      new hdl_localization::PoseEstimator(registration_, initial_pose, 0.001, 0, 2.0, cool_time_duration_));
 
   // Initialize subscriber and publisher
   if (use_imu_)
@@ -116,13 +126,15 @@ void HdlLocalizationNodelet::onInit()
     ros::service::waitForService("/hdl_global_localization/set_global_map");
     ros::service::waitForService("/hdl_global_localization/query");
 
-    set_global_map_service_ = nh_.serviceClient<hdl_global_localization::SetGlobalMap>("/hdl_global_localization/"
-                                                                                       "set_global_map");
-    query_global_localization_service_ = nh_.serviceClient<hdl_global_localization::QueryGlobalLocalization>("/hdl_"
-                                                                                                             "global_"
-                                                                                                             "localiz"
-                                                                                                             "ation/"
-                                                                                                             "query");
+    set_global_map_service_ = nh_.serviceClient<hdl_global_localization::SetGlobalMap>(
+        "/hdl_global_localization/"
+        "set_global_map");
+    query_global_localization_service_ = nh_.serviceClient<hdl_global_localization::QueryGlobalLocalization>(
+        "/hdl_"
+        "global_"
+        "localiz"
+        "ation/"
+        "query");
 
     relocalize_server_ = nh_.advertiseService("/relocalize", &HdlLocalizationNodelet::relocalize, this);
   }
@@ -243,7 +255,20 @@ void HdlLocalizationNodelet::initializeParams()
 void HdlLocalizationNodelet::imuCallback(const sensor_msgs::ImuConstPtr& imu_msg)
 {
   std::lock_guard<std::mutex> lock(imu_data_mutex_);
-  imu_data_.push_back(imu_msg);
+  sensor_msgs::Imu imu_data = *imu_msg;
+  if (invert_acc_)
+  {
+    imu_data.linear_acceleration.x *= -1.0;
+    imu_data.linear_acceleration.y *= -1.0;
+    imu_data.linear_acceleration.z *= -1.0;
+  }
+  if (invert_gyro_)
+  {
+    imu_data.angular_velocity.x *= -1.0;
+    imu_data.angular_velocity.y *= -1.0;
+    imu_data.angular_velocity.z *= -1.0;
+  }
+  imu_data_.push_back(boost::make_shared<sensor_msgs::Imu>(imu_data));
 }
 
 /**
@@ -258,7 +283,7 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
     return;
   }
 
-  const auto& stamp = points_msg->header.stamp;
+  const auto& points_stamp = points_msg->header.stamp;
   pcl::PointCloud<HdlLocalizationNodelet::PointT>::Ptr pcl_cloud(new pcl::PointCloud<HdlLocalizationNodelet::PointT>());
   pcl::fromROSMsg(*points_msg, *pcl_cloud);
 
@@ -268,16 +293,17 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
     return;
   }
 
-  ros::Time last_correction_time = pose_estimator_->lastCorrectionTime();
+  ros::Time last_correction_time = pose_estimator_->lastMeasurementTime();
   // Skip calculation if timestamp is wrong
-  if (stamp < last_correction_time)
+  if (points_stamp < last_correction_time)
   {
     return;
   }
   // transform pointcloud into odom_child_frame_id
   std::string tf_error;
   pcl::PointCloud<HdlLocalizationNodelet::PointT>::Ptr cloud(new pcl::PointCloud<HdlLocalizationNodelet::PointT>());
-  if (this->tf_buffer_.canTransform(base_frame_id_, pcl_cloud->header.frame_id, stamp, ros::Duration(0.1), &tf_error))
+  if (this->tf_buffer_.canTransform(base_frame_id_, pcl_cloud->header.frame_id, points_stamp, ros::Duration(0.1),
+                                    &tf_error))
   {
     if (!pcl_ros::transformPointCloud(base_frame_id_, *pcl_cloud, *cloud, this->tf_buffer_))
     {
@@ -293,7 +319,6 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
 
   auto filtered = downsample(cloud);
   last_scan_ = filtered;
-
   if (relocalizing_)
   {
     delta_estimator_->addFrame(filtered);
@@ -305,30 +330,21 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
     NODELET_ERROR_THROTTLE(10.0, "Waiting for initial pose input");
     return;
   }
-  Eigen::Matrix4f before = pose_estimator_->matrix();
-
-  if (use_imu_)
+  Eigen::Matrix4f before = pose_estimator_->getTransformationMatrix();
+  RobotLocalization::Measurement motion_measurement;
+  if (use_imu_ && !imu_data_.empty())
   {
-    // PointClouds + IMU prediction
-    if (imu_data_.empty())
-    {
-      NODELET_WARN_THROTTLE(10.0, "Waiting for imu data");
-      return;
-    }
     std::lock_guard<std::mutex> lock(imu_data_mutex_);
     auto imu_iter = imu_data_.begin();
     for (imu_iter; imu_iter != imu_data_.end(); imu_iter++)
     {
-      if (stamp < (*imu_iter)->header.stamp)
+      if (points_stamp < (*imu_iter)->header.stamp)
       {
         break;
       }
-      const auto& acc = (*imu_iter)->linear_acceleration;
-      const auto& gyro = (*imu_iter)->angular_velocity;
-      double acc_sign = invert_acc_ ? -1.0 : 1.0;
-      double gyro_sign = invert_gyro_ ? -1.0 : 1.0;
-      pose_estimator_->predictImu((*imu_iter)->header.stamp, acc_sign * Eigen::Vector3f(acc.x, acc.y, acc.z),
-                                  gyro_sign * Eigen::Vector3f(gyro.x, gyro.y, gyro.z));
+      pose_estimator_->ukfPredict((*imu_iter)->header.stamp);
+      motion_measurement = pose_estimator_->imu2UkfMeasurement(**imu_iter);
+      pose_estimator_->ukfCorrect(motion_measurement);
     }
     imu_data_.erase(imu_data_.begin(), imu_iter);
   }
@@ -338,7 +354,6 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
     if (odom_frame_id_.empty() || base_frame_id_.empty())
     {
       NODELET_WARN_THROTTLE(10.0, "odom_frame_id_ or base_frame_id_ is not set");
-      return;
     }
     if (!odom_ready_)
     {
@@ -347,7 +362,6 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
       if (!odom_ready_)
       {
         NODELET_WARN_THROTTLE(10.0, "Waiting for %s -> %s transform", odom_frame_id_.c_str(), base_frame_id_.c_str());
-        return;
       }
     }
     if (tf_buffer_.canTransform(base_frame_id_, odom_stamp_last_, base_frame_id_, ros::Time(0), odom_frame_id_,
@@ -359,7 +373,7 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
           tf_buffer_.lookupTransform(base_frame_id_, odom_stamp_last_, base_frame_id_, ros::Time(0), odom_frame_id_);
       // Get the latest base_frame_ to get the time
       geometry_msgs::TransformStamped odom_now =
-          tf_buffer_.lookupTransform(odom_frame_id_, base_frame_id_, ros::Time(0));
+          tf_buffer_.lookupTransform(odom_frame_id_, base_frame_id_, points_stamp);
       ros::Time odom_stamp = odom_now.header.stamp;
       ros::Duration odom_time_diff = odom_stamp - odom_stamp_last_;
       double odom_time_diff_sec = odom_time_diff.toSec();
@@ -378,35 +392,34 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
         tf::Matrix3x3(odom_travel_angular).getRPY(roll, pitch, yaw);
         Eigen::Vector3f odom_twist_angular(roll / odom_time_diff_sec, pitch / odom_time_diff_sec,
                                            yaw / odom_time_diff_sec);
-        pose_estimator_->predictOdom(odom_stamp, odom_twist_linear, odom_twist_angular);
+        nav_msgs::Odometry odom_travel;
+        odom_travel.header.stamp = odom_stamp;
+        odom_travel.header.frame_id = odom_frame_id_;
+        odom_travel.child_frame_id = base_frame_id_;
+        odom_travel.twist.twist.linear.x = odom_twist_linear.x();
+        odom_travel.twist.twist.linear.y = odom_twist_linear.y();
+        odom_travel.twist.twist.linear.z = odom_twist_linear.z();
+        odom_travel.twist.twist.angular.x = odom_twist_angular.x();
+        odom_travel.twist.twist.angular.y = odom_twist_angular.y();
+        odom_travel.twist.twist.angular.z = odom_twist_angular.z();
+        odom_travel.twist.covariance[0] = 0.1;
+        odom_travel.twist.covariance[7] = 0.1;
+        odom_travel.twist.covariance[14] = 0.1;
+        odom_travel.twist.covariance[21] = 0.05;
+        odom_travel.twist.covariance[28] = 0.05;
+        odom_travel.twist.covariance[35] = 0.05;
+        pose_estimator_->ukfPredict(odom_stamp);
+        motion_measurement = pose_estimator_->odom2UkfMeasurement(odom_travel);
+        pose_estimator_->ukfCorrect(motion_measurement);
       }
       odom_stamp_last_ = odom_stamp;
     }
-    else
-    {
-      if (tf_buffer_.canTransform(odom_frame_id_, base_frame_id_, ros::Time(0), ros::Duration(0.1)))
-      {
-        NODELET_WARN_THROTTLE(10.0, "The last timestamp is wrong, skip localization");
-        // Get the latest base_frame_ to get the time
-        geometry_msgs::TransformStamped odom_now =
-            tf_buffer_.lookupTransform(odom_frame_id_, base_frame_id_, ros::Time(0));
-        odom_stamp_last_ = odom_now.header.stamp;
-      }
-      else
-      {
-        NODELET_WARN_STREAM("Failed to look up transform between " << cloud->header.frame_id << " and "
-                                                                   << odom_frame_id_);
-      }
-    }
   }
-  else
-  {
-    // PointClouds-only prediction
-    pose_estimator_->predict(stamp);
-  }
-  // Perform scan matching using the calculated position as the initial value
-  double fitness_score;
-  auto aligned = pose_estimator_->correct(stamp, filtered, fitness_score);
+  pose_estimator_->ukfPredict(points_stamp);
+  RobotLocalization::Measurement ndt_measurement = pose_estimator_->ndtRegistration(points_stamp, filtered);
+  double fitness_score = pose_estimator_->getFitnessScore();
+  pose_estimator_->ukfCorrect(ndt_measurement);
+  auto aligned = pose_estimator_->getAlignedPoints(filtered, pose_estimator_->getTransformationMatrix());
 
   if (aligned_pub_.getNumSubscribers())
   {
@@ -420,7 +433,7 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
     publishScanMatchingStatus(points_msg->header, aligned);
   }
 
-  publishOdometry(points_msg->header.stamp, pose_estimator_->matrix(), fitness_score);
+  publishOdometry(points_msg->header.stamp, pose_estimator_->getTransformationMatrix(), fitness_score);
 }
 
 /**
@@ -497,11 +510,20 @@ bool HdlLocalizationNodelet::relocalize(std_srvs::EmptyRequest& /*req*/, std_srv
   pose = pose * delta_estimator_->estimatedDelta();
 
   std::lock_guard<std::mutex> lock(pose_estimator_mutex_);
-  pose_estimator_.reset(new hdl_localization::PoseEstimator(registration_, pose.translation(),
-                                                            Eigen::Quaternionf(pose.linear()), cool_time_duration_));
-
+  geometry_msgs::PoseWithCovarianceStamped initial_pose;
+  initial_pose.header.frame_id = global_frame_id_;
+  initial_pose.header.stamp = ros::Time::now();
+  initial_pose.pose.pose.position.x = pose.translation().x();
+  initial_pose.pose.pose.position.y = pose.translation().y();
+  initial_pose.pose.pose.position.z = pose.translation().z();
+  Eigen::Quaternionf q(pose.linear());
+  initial_pose.pose.pose.orientation.x = q.x();
+  initial_pose.pose.pose.orientation.y = q.y();
+  initial_pose.pose.pose.orientation.z = q.z();
+  initial_pose.pose.pose.orientation.w = q.w();
+  pose_estimator_.reset(
+      new hdl_localization::PoseEstimator(registration_, initial_pose, 0.001, 0, 2.0, cool_time_duration_));
   relocalizing_ = false;
-
   return true;
 }
 
@@ -556,8 +578,18 @@ void HdlLocalizationNodelet::initialposeCallback(const geometry_msgs::PoseWithCo
     imu_data_.clear();
   }
   std::lock_guard<std::mutex> lock(pose_estimator_mutex_);
+  geometry_msgs::PoseWithCovarianceStamped initial_pose;
+  initial_pose.header.frame_id = global_frame_id_;
+  initial_pose.header.stamp = ros::Time::now();
+  initial_pose.pose.pose.position.x = init_pose_.x();
+  initial_pose.pose.pose.position.y = init_pose_.y();
+  initial_pose.pose.pose.position.z = init_pose_.z();
+  initial_pose.pose.pose.orientation.x = init_orientation_.x();
+  initial_pose.pose.pose.orientation.y = init_orientation_.y();
+  initial_pose.pose.pose.orientation.z = init_orientation_.z();
+  initial_pose.pose.pose.orientation.w = init_orientation_.w();
   pose_estimator_.reset(
-      new hdl_localization::PoseEstimator(registration_, init_pose_, init_orientation_, cool_time_duration_));
+      new hdl_localization::PoseEstimator(registration_, initial_pose, 0.001, 0, 2.0, cool_time_duration_));
 }
 
 /**
@@ -696,15 +728,15 @@ void HdlLocalizationNodelet::publishScanMatchingStatus(const std_msgs::Header& h
 
   std::vector<double> errors(6, 0.0);
 
-  if (pose_estimator_->woPredictionError())
+  if (pose_estimator_->getNdtTravel())
   {
     status.prediction_labels.push_back(std_msgs::String());
     status.prediction_labels.back().data = "without_pred";
     status.prediction_errors.push_back(
-        tf2::eigenToTransform(Eigen::Isometry3d(pose_estimator_->woPredictionError().get().cast<double>())).transform);
+        tf2::eigenToTransform(Eigen::Isometry3d(pose_estimator_->getNdtTravel().get().cast<double>())).transform);
   }
 
-  if (pose_estimator_->motionPredictionError())
+  if (pose_estimator_->getNdtCorrect())
   {
     status.prediction_labels.push_back(std_msgs::String());
     if (use_imu_)
@@ -721,8 +753,7 @@ void HdlLocalizationNodelet::publishScanMatchingStatus(const std_msgs::Header& h
     }
 
     status.prediction_errors.push_back(
-        tf2::eigenToTransform(Eigen::Isometry3d(pose_estimator_->motionPredictionError().get().cast<double>()))
-            .transform);
+        tf2::eigenToTransform(Eigen::Isometry3d(pose_estimator_->getNdtCorrect().get().cast<double>())).transform);
   }
   status_pub_.publish(status);
 }

@@ -2,217 +2,373 @@
 
 namespace hdl_localization
 {
-/**
- * @brief constructor
- * @param registration        registration method
- * @param pos                 initial position
- * @param quat                initial orientation
- * @param cool_time_duration  during "cool time", prediction is not performed
- */
 PoseEstimator::PoseEstimator(pcl::Registration<PointT, PointT>::Ptr& registration,
-                             const Eigen::Vector3f& initial_position, const Eigen::Quaternionf& initial_orientation,
-                             double cool_time_duration)
-  : registration_(registration), cool_time_duration_(cool_time_duration)
+                             const geometry_msgs::PoseWithCovarianceStamped initial_pose, double alpha, double kappa,
+                             double beta, double cool_time_duration)
+  : registration_(registration)
+  , cool_time_duration_(cool_time_duration)
+  , fitness_score_(0.0)
+  , transformation_probability_(0.0)
 {
-  last_observation_ = Eigen::Matrix4f::Identity();
-  last_observation_.block<3, 3>(0, 0) = initial_orientation.toRotationMatrix();
-  last_observation_.block<3, 1>(0, 3) = initial_position;
+  // Set the initialization timestamp
+  predict_current_stamp_ = ros::Time::now();
+  predict_prev_stamp_ = predict_current_stamp_;
+  // Initialize UKF
+  const Eigen::MatrixXd process_noise =
+      Eigen::MatrixXd::Identity(RobotLocalization::STATE_SIZE, RobotLocalization::STATE_SIZE) * 0.01;
 
-  process_noise_ = Eigen::MatrixXf::Identity(16, 16);
-  process_noise_.middleRows(0, 3) *= 1.0;
-  process_noise_.middleRows(3, 3) *= 1.0;
-  process_noise_.middleRows(6, 4) *= 0.5;
-  process_noise_.middleRows(10, 3) *= 1e-6;
-  process_noise_.middleRows(13, 3) *= 1e-6;
-
-  Eigen::MatrixXf measurement_noise = Eigen::MatrixXf::Identity(7, 7);
-  measurement_noise.middleRows(0, 3) *= 0.01;
-  measurement_noise.middleRows(3, 4) *= 0.001;
-
-  Eigen::VectorXf mean(16);
-  mean.middleRows(0, 3) = initial_position;
-  mean.middleRows(3, 3).setZero();
-  mean.middleRows(6, 4) = Eigen::Vector4f(initial_orientation.w(), initial_orientation.x(), initial_orientation.y(),
-                                          initial_orientation.z())
-                              .normalized();
-  mean.middleRows(10, 3).setZero();
-  mean.middleRows(13, 3).setZero();
-
-  Eigen::MatrixXf cov = Eigen::MatrixXf::Identity(16, 16) * 0.01;
-
-  PoseSystem system;
-  ukf_.reset(new kkl::alg::UnscentedKalmanFilterX<float, PoseSystem>(system, 16, 7, process_noise_, measurement_noise,
-                                                                     mean, cov));
-  // TODO: Change odom covariance constants to ROS params
-  // or subscribe an odometry topic and use it's covariance
-  odom_process_noise_ = Eigen::MatrixXf::Identity(16, 16) * 1e-5;
-  odom_process_noise_.middleRows(6, 4) *= 1e-2;
+  std::vector<double> args = { alpha, kappa, beta };
+  // Set the initial state
+  ukfReset(initial_pose, process_noise, args[0], args[1], args[2]);
 }
 
 PoseEstimator::~PoseEstimator()
 {
 }
 
-/**
- * @brief predict
- * @param stamp    timestamp
- * @param acc      acceleration
- * @param gyro     angular velocity
- */
-void PoseEstimator::predict(const ros::Time& stamp)
+void PoseEstimator::runNdtLocalization(const ros::Time& stamp, const pcl::PointCloud<PointT>::ConstPtr& cloud,
+                                       const RobotLocalization::Measurement& measurement)
 {
-  if (init_stamp_.is_zero())
-  {
-    init_stamp_ = stamp;
-  }
-
-  if ((stamp - init_stamp_).toSec() < cool_time_duration_ || prev_stamp_.is_zero() || prev_stamp_ == stamp)
-  {
-    prev_stamp_ = stamp;
-    return;
-  }
-
-  double dt = (stamp - prev_stamp_).toSec();
-  prev_stamp_ = stamp;
-
-  ukf_->setProcessNoiseCov(process_noise_ * dt);
-  ukf_->system_.dt_ = dt;
-
-  ukf_->predict();
+  // Predict
+  ukfPredict(stamp);
+  RobotLocalization::Measurement ndt_measurement = ndtRegistration(stamp, cloud);
+  RobotLocalization::Measurement combined_measurement = combineMeasurements(ndt_measurement, measurement);
+  // Correct
+  ukfCorrect(combined_measurement);
 }
 
-/**
- * @brief predict
- * @param stamp    timestamp
- * @param imu_acc      acceleration
- * @param imu_gyro     angular velocity
- */
-void PoseEstimator::predictImu(const ros::Time& stamp, const Eigen::Vector3f& imu_acc, const Eigen::Vector3f& imu_gyro)
+void PoseEstimator::ukfReset(const geometry_msgs::PoseWithCovarianceStamped initial_pose,
+                             const Eigen::MatrixXd& process_noise, double alpha, double kappa, double beta)
 {
-  if (init_stamp_.is_zero())
+  ukf_->reset();
+  if (process_noise.rows() != RobotLocalization::STATE_SIZE || process_noise.cols() != RobotLocalization::STATE_SIZE)
   {
-    init_stamp_ = stamp;
+    ROS_ERROR_STREAM("Invalid process noise matrix size");
   }
-
-  if ((stamp - init_stamp_).toSec() < cool_time_duration_ || prev_stamp_.is_zero() || prev_stamp_ == stamp)
+  else
   {
-    prev_stamp_ = stamp;
-    return;
+    setUkfProcessNoise(process_noise);
   }
-
-  double dt = (stamp - prev_stamp_).toSec();
-  prev_stamp_ = stamp;
-
-  ukf_->setProcessNoiseCov(process_noise_ * dt);
-  ukf_->system_.dt_ = dt;
-  ukf_->predictImu(imu_acc, imu_gyro);
+  RobotLocalization::Measurement initial_state = initialPose2Measurement(initial_pose);
+  setUkfInitialState(initial_state);
+  setUkfAlpha(alpha, kappa, beta);
 }
 
-/**
- * @brief predict_odom
- * @param stamp    timestamp
- * @param odom_twist_linear   linear velocity
- * @param odom_twist_angular  angular velocity
- */
-void PoseEstimator::predictOdom(const ros::Time& stamp, const Eigen::Vector3f& odom_twist_linear,
-                                const Eigen::Vector3f& odom_twist_angular)
+void PoseEstimator::setUkfInitialState(RobotLocalization::Measurement initial_state)
 {
-  if ((stamp - init_stamp_).toSec() < cool_time_duration_ || prev_stamp_.is_zero() || prev_stamp_ == stamp)
-  {
-    prev_stamp_ = stamp;
-    return;
-  }
-
-  double dt = (stamp - prev_stamp_).toSec();
-  prev_stamp_ = stamp;
-
-  ukf_->setProcessNoiseCov(odom_process_noise_ * dt);
-  ukf_->system_.dt_ = dt;
-
-  ukf_->predictOdom(odom_twist_linear, odom_twist_angular);
+  ukf_->reset();
+  ukf_->correct(initial_state);
 }
 
-/**
- * @brief correct
- * @param cloud   input cloud
- * @return cloud aligned to the globalmap
- */
-pcl::PointCloud<PoseEstimator::PointT>::Ptr PoseEstimator::correct(const ros::Time& stamp,
-                                                                   const pcl::PointCloud<PointT>::ConstPtr& cloud,
-                                                                   double& fitness_score)
+void PoseEstimator::ukfPredict(ros::Time current_time)
 {
-  if (init_stamp_.is_zero())
+  double delta = (current_time - predict_current_stamp_).toSec();
+  predict_current_stamp_ = current_time;
+  predict_prev_stamp_ = predict_current_stamp_;
+  Eigen::Vector3f last_pose = getPose();
+  Eigen::Quaternionf last_quaternion = getQuaternion();
+  ukf_->predict(predict_current_stamp_.toSec(), delta);
+  Eigen::Vector3f current_pose = getPose();
+  Eigen::Quaternionf current_quaternion = getQuaternion();
+  ukf_travel_ = Eigen::Matrix4f::Identity();
+  ukf_travel_->block<3, 1>(0, 3) = current_pose - last_pose;
+  ukf_travel_->block<3, 3>(0, 0) = current_quaternion.toRotationMatrix() * last_quaternion.toRotationMatrix().inverse();
+}
+
+void PoseEstimator::ukfCorrect(const RobotLocalization::Measurement& measurement)
+{
+  Eigen::Vector3f last_pose = getPose();
+  Eigen::Quaternionf last_quaternion = getQuaternion();
+  ukf_->correct(measurement);
+  Eigen::Vector3f current_pose = getPose();
+  Eigen::Quaternionf current_quaternion = getQuaternion();
+  ndt_travel_ = Eigen::Matrix4f::Identity();
+  ndt_travel_->block<3, 1>(0, 3) = current_pose - last_pose;
+  ndt_travel_->block<3, 3>(0, 0) = current_quaternion.toRotationMatrix() * last_quaternion.toRotationMatrix().inverse();
+}
+
+RobotLocalization::Measurement PoseEstimator::imu2UkfMeasurement(const sensor_msgs::Imu imu_msg)
+{
+  RobotLocalization::Measurement measurement;
+  measurement.time_ = imu_msg.header.stamp.toSec();
+  measurement.measurement_[RobotLocalization::StateMemberAx] = imu_msg.linear_acceleration.x;
+  measurement.measurement_[RobotLocalization::StateMemberAy] = imu_msg.linear_acceleration.y;
+  measurement.measurement_[RobotLocalization::StateMemberAz] = imu_msg.linear_acceleration.z;
+  measurement.measurement_[RobotLocalization::StateMemberVroll] = imu_msg.angular_velocity.x;
+  measurement.measurement_[RobotLocalization::StateMemberVpitch] = imu_msg.angular_velocity.y;
+  measurement.measurement_[RobotLocalization::StateMemberVyaw] = imu_msg.angular_velocity.z;
+  Eigen::MatrixXd covariance = Eigen::MatrixXd::Zero(RobotLocalization::STATE_SIZE, RobotLocalization::STATE_SIZE);
+  covariance(RobotLocalization::StateMemberAx, RobotLocalization::StateMemberAx) =
+      imu_msg.linear_acceleration_covariance[0];
+  covariance(RobotLocalization::StateMemberAy, RobotLocalization::StateMemberAy) =
+      imu_msg.linear_acceleration_covariance[4];
+  covariance(RobotLocalization::StateMemberAz, RobotLocalization::StateMemberAz) =
+      imu_msg.linear_acceleration_covariance[8];
+  covariance(RobotLocalization::StateMemberVroll, RobotLocalization::StateMemberVroll) =
+      imu_msg.angular_velocity_covariance[0];
+  covariance(RobotLocalization::StateMemberVpitch, RobotLocalization::StateMemberVpitch) =
+      imu_msg.angular_velocity_covariance[4];
+  covariance(RobotLocalization::StateMemberVyaw, RobotLocalization::StateMemberVyaw) =
+      imu_msg.angular_velocity_covariance[8];
+  measurement.covariance_ = covariance;
+  std::vector<int> update_flags(RobotLocalization::STATE_SIZE, 0);
+  update_flags[RobotLocalization::StateMemberAx] = 1;
+  update_flags[RobotLocalization::StateMemberAy] = 1;
+  update_flags[RobotLocalization::StateMemberAz] = 1;
+  update_flags[RobotLocalization::StateMemberVroll] = 1;
+  update_flags[RobotLocalization::StateMemberVpitch] = 1;
+  update_flags[RobotLocalization::StateMemberVyaw] = 1;
+  measurement.updateVector_ = update_flags;
+  return measurement;
+}
+
+RobotLocalization::Measurement PoseEstimator::odom2UkfMeasurement(const nav_msgs::Odometry odom_msg)
+{
+  RobotLocalization::Measurement measurement;
+  measurement.time_ = odom_msg.header.stamp.toSec();
+  measurement.measurement_[RobotLocalization::StateMemberVx] = odom_msg.twist.twist.linear.x;
+  measurement.measurement_[RobotLocalization::StateMemberVy] = odom_msg.twist.twist.linear.y;
+  measurement.measurement_[RobotLocalization::StateMemberVz] = odom_msg.twist.twist.linear.z;
+  measurement.measurement_[RobotLocalization::StateMemberVroll] = odom_msg.twist.twist.angular.x;
+  measurement.measurement_[RobotLocalization::StateMemberVpitch] = odom_msg.twist.twist.angular.y;
+  measurement.measurement_[RobotLocalization::StateMemberVyaw] = odom_msg.twist.twist.angular.z;
+  Eigen::MatrixXd covariance = Eigen::MatrixXd::Zero(RobotLocalization::STATE_SIZE, RobotLocalization::STATE_SIZE);
+  covariance(RobotLocalization::StateMemberVx, RobotLocalization::StateMemberVx) = odom_msg.twist.covariance[0];
+  covariance(RobotLocalization::StateMemberVy, RobotLocalization::StateMemberVy) = odom_msg.twist.covariance[7];
+  covariance(RobotLocalization::StateMemberVz, RobotLocalization::StateMemberVz) = odom_msg.twist.covariance[14];
+  covariance(RobotLocalization::StateMemberVroll, RobotLocalization::StateMemberVroll) = odom_msg.twist.covariance[21];
+  covariance(RobotLocalization::StateMemberVpitch, RobotLocalization::StateMemberVpitch) =
+      odom_msg.twist.covariance[28];
+  covariance(RobotLocalization::StateMemberVyaw, RobotLocalization::StateMemberVyaw) = odom_msg.twist.covariance[35];
+  measurement.covariance_ = covariance;
+  std::vector<int> update_flags(RobotLocalization::STATE_SIZE, 0);
+  update_flags[RobotLocalization::StateMemberVx] = 1;
+  update_flags[RobotLocalization::StateMemberVy] = 1;
+  update_flags[RobotLocalization::StateMemberVz] = 1;
+  update_flags[RobotLocalization::StateMemberVroll] = 1;
+  update_flags[RobotLocalization::StateMemberVpitch] = 1;
+  update_flags[RobotLocalization::StateMemberVyaw] = 1;
+  measurement.updateVector_ = update_flags;
+  return measurement;
+}
+
+RobotLocalization::Measurement
+PoseEstimator::initialPose2Measurement(const geometry_msgs::PoseWithCovarianceStamped initial_pose)
+{
+  RobotLocalization::Measurement measurement;
+  measurement.time_ = ros::Time::now().toSec();
+  measurement.measurement_[RobotLocalization::StateMemberX] = initial_pose.pose.pose.position.x;
+  measurement.measurement_[RobotLocalization::StateMemberY] = initial_pose.pose.pose.position.y;
+  measurement.measurement_[RobotLocalization::StateMemberZ] = initial_pose.pose.pose.position.z;
+  tf2::Quaternion tf2_quat(initial_pose.pose.pose.orientation.x, initial_pose.pose.pose.orientation.y,
+                           initial_pose.pose.pose.orientation.z, initial_pose.pose.pose.orientation.w);
+  double initial_roll, initial_pitch, initial_yaw;
+  RobotLocalization::RosFilterUtilities::quatToRPY(tf2_quat, initial_roll, initial_pitch, initial_yaw);
+  measurement.measurement_[RobotLocalization::StateMemberRoll] = initial_roll;
+  measurement.measurement_[RobotLocalization::StateMemberPitch] = initial_pitch;
+  measurement.measurement_[RobotLocalization::StateMemberYaw] = initial_yaw;
+  Eigen::MatrixXd covariance = Eigen::MatrixXd::Zero(RobotLocalization::STATE_SIZE, RobotLocalization::STATE_SIZE);
+  double initial_covariance = 1e-6;
+  covariance(RobotLocalization::StateMemberX, RobotLocalization::StateMemberX) = initial_covariance;
+  covariance(RobotLocalization::StateMemberY, RobotLocalization::StateMemberY) = initial_covariance;
+  covariance(RobotLocalization::StateMemberZ, RobotLocalization::StateMemberZ) = initial_covariance;
+  covariance(RobotLocalization::StateMemberRoll, RobotLocalization::StateMemberRoll) = initial_covariance;
+  covariance(RobotLocalization::StateMemberPitch, RobotLocalization::StateMemberPitch) = initial_covariance;
+  covariance(RobotLocalization::StateMemberYaw, RobotLocalization::StateMemberYaw) = initial_covariance;
+  measurement.covariance_ = covariance;
+  std::vector<int> update_flags(RobotLocalization::STATE_SIZE, 0);
+  update_flags[RobotLocalization::StateMemberX] = 1;
+  update_flags[RobotLocalization::StateMemberY] = 1;
+  update_flags[RobotLocalization::StateMemberZ] = 1;
+  update_flags[RobotLocalization::StateMemberRoll] = 1;
+  update_flags[RobotLocalization::StateMemberPitch] = 1;
+  update_flags[RobotLocalization::StateMemberYaw] = 1;
+  measurement.updateVector_ = update_flags;
+  return measurement;
+}
+
+RobotLocalization::Measurement PoseEstimator::ndtRegistration(const ros::Time& stamp,
+                                                              const pcl::PointCloud<PointT>::ConstPtr& cloud)
+{
+  RobotLocalization::Measurement measurement;
+  if (ndt_prev_stamp_.is_zero())
   {
-    init_stamp_ = stamp;
+    ndt_prev_stamp_ = stamp;
+    std::vector<int> update_flags(RobotLocalization::STATE_SIZE, 0);
+    measurement.updateVector_ = update_flags;
+    return measurement;
   }
-
-  last_correction_stamp_ = stamp;
-
-  Eigen::Matrix4f no_guess = last_observation_;
-  Eigen::Matrix4f init_guess = matrix();
-
+  Eigen::Matrix4f init_guess = Eigen::Matrix4f::Identity();
+  init_guess.block<3, 3>(0, 0) = getRotationMatrix().block<3, 3>(0, 0);
+  init_guess.block<3, 1>(0, 3) = getPose();
   pcl::PointCloud<PointT>::Ptr aligned(new pcl::PointCloud<PointT>());
   registration_->setInputSource(cloud);
   registration_->align(*aligned, init_guess);
-  fitness_score = registration_->getFitnessScore();
+  fitness_score_ = registration_->getFitnessScore();
+  // transformation_probability_ = registration_->getTransformationProbability();
+  ndt_correct_ = registration_->getFinalTransformation();
+  Eigen::Vector3f ndt_pose = ndt_correct_->block<3, 1>(0, 3);
+  Eigen::Quaternionf ndt_orientation(ndt_correct_->block<3, 3>(0, 0));
 
-  Eigen::Matrix4f trans = registration_->getFinalTransformation();
-  Eigen::Vector3f p = trans.block<3, 1>(0, 3);
-  Eigen::Quaternionf q(trans.block<3, 3>(0, 0));
-
-  if (quat().coeffs().dot(q.coeffs()) < 0.0f)
+  if (getQuaternion().coeffs().dot(ndt_orientation.coeffs()) < 0.0f)
   {
-    q.coeffs() *= -1.0f;
+    ndt_orientation.coeffs() *= -1.0f;
   }
+  measurement.measurement_[RobotLocalization::StateMemberX] = ndt_pose[0];
+  measurement.measurement_[RobotLocalization::StateMemberY] = ndt_pose[1];
+  measurement.measurement_[RobotLocalization::StateMemberZ] = ndt_pose[2];
+  tf2::Quaternion tf2_quat(ndt_orientation.x(), ndt_orientation.y(), ndt_orientation.z(), ndt_orientation.w());
+  double roll, pitch, yaw;
+  RobotLocalization::RosFilterUtilities::quatToRPY(tf2_quat, roll, pitch, yaw);
+  measurement.measurement_[RobotLocalization::StateMemberRoll] = roll;
+  measurement.measurement_[RobotLocalization::StateMemberPitch] = pitch;
+  measurement.measurement_[RobotLocalization::StateMemberYaw] = yaw;
+  Eigen::MatrixXd covariance =
+      Eigen::MatrixXd::Zero(RobotLocalization::STATE_SIZE, RobotLocalization::STATE_SIZE) * fitness_score_;
+  measurement.covariance_ = covariance;
+  std::vector<int> update_flags(RobotLocalization::STATE_SIZE, 0);
+  update_flags[RobotLocalization::StateMemberX] = 1;
+  update_flags[RobotLocalization::StateMemberY] = 1;
+  update_flags[RobotLocalization::StateMemberZ] = 1;
+  update_flags[RobotLocalization::StateMemberRoll] = 1;
+  update_flags[RobotLocalization::StateMemberPitch] = 1;
+  update_flags[RobotLocalization::StateMemberYaw] = 1;
+  measurement.updateVector_ = update_flags;
+  return measurement;
+}
 
-  Eigen::VectorXf observation(7);
-  observation.middleRows(0, 3) = p;
-  observation.middleRows(3, 4) = Eigen::Vector4f(q.w(), q.x(), q.y(), q.z());
-  last_observation_ = trans;
+RobotLocalization::Measurement PoseEstimator::combineMeasurements(RobotLocalization::Measurement ndt_measurement,
+                                                                  RobotLocalization::Measurement motion_measurement)
+{
+  RobotLocalization::Measurement measurement = ndt_measurement;
+  for (int i = 0; i < RobotLocalization::STATE_SIZE; i++)
+  {
+    if (motion_measurement.updateVector_[i] == 1 && ndt_measurement.updateVector_[i] == 0)
+    {
+      measurement.measurement_[i] = motion_measurement.measurement_[i];
+      measurement.covariance_(i, i) = motion_measurement.covariance_(i, i);
+      measurement.updateVector_[i] = 1;
+    }
+  }
+  return measurement;
+}
 
-  wo_pred_error_ = no_guess.inverse() * registration_->getFinalTransformation();
-  ukf_->correct(observation);
-  motion_pred_error_ = init_guess.inverse() * registration_->getFinalTransformation();
+nav_msgs::Odometry PoseEstimator::getOdometry()
+{
+  nav_msgs::Odometry odom;
+  odom.header.stamp = predict_current_stamp_;
+  odom.header.frame_id = "map";
+  odom.child_frame_id = "base_link";
+  odom.pose.pose.position.x = ukf_->getState()[RobotLocalization::StateMemberX];
+  odom.pose.pose.position.y = ukf_->getState()[RobotLocalization::StateMemberY];
+  odom.pose.pose.position.z = ukf_->getState()[RobotLocalization::StateMemberZ];
+  tf2::Quaternion tf2_quat;
+  tf2_quat.setRPY(ukf_->getState()[RobotLocalization::StateMemberRoll],
+                  ukf_->getState()[RobotLocalization::StateMemberPitch],
+                  ukf_->getState()[RobotLocalization::StateMemberYaw]);
+  odom.pose.pose.orientation.x = tf2_quat.x();
+  odom.pose.pose.orientation.y = tf2_quat.y();
+  odom.pose.pose.orientation.z = tf2_quat.z();
+  odom.pose.pose.orientation.w = tf2_quat.w();
+  odom.twist.twist.linear.x = ukf_->getState()[RobotLocalization::StateMemberVx];
+  odom.twist.twist.linear.y = ukf_->getState()[RobotLocalization::StateMemberVy];
+  odom.twist.twist.linear.z = ukf_->getState()[RobotLocalization::StateMemberVz];
+  odom.twist.twist.angular.x = ukf_->getState()[RobotLocalization::StateMemberVroll];
+  odom.twist.twist.angular.y = ukf_->getState()[RobotLocalization::StateMemberVpitch];
+  odom.twist.twist.angular.z = ukf_->getState()[RobotLocalization::StateMemberVyaw];
+  return odom;
+}
 
+ros::Time PoseEstimator::lastMeasurementTime()
+{
+  return predict_current_stamp_;
+}
+
+Eigen::Vector3f PoseEstimator::getPose()
+{
+  Eigen::Vector3f pose;
+  pose[0] = ukf_->getState()[RobotLocalization::StateMemberX];
+  pose[1] = ukf_->getState()[RobotLocalization::StateMemberY];
+  pose[2] = ukf_->getState()[RobotLocalization::StateMemberZ];
+  return pose;
+}
+
+Eigen::Vector3f PoseEstimator::getVelocity()
+{
+  Eigen::Vector3f velocity;
+  velocity[0] = ukf_->getState()[RobotLocalization::StateMemberVx];
+  velocity[1] = ukf_->getState()[RobotLocalization::StateMemberVy];
+  velocity[2] = ukf_->getState()[RobotLocalization::StateMemberVz];
+  return velocity;
+}
+
+Eigen::Quaternionf PoseEstimator::getQuaternion()
+{
+  Eigen::Quaternionf quaternion;
+  quaternion.x() = ukf_->getState()[RobotLocalization::StateMemberRoll];
+  quaternion.y() = ukf_->getState()[RobotLocalization::StateMemberPitch];
+  quaternion.z() = ukf_->getState()[RobotLocalization::StateMemberYaw];
+  quaternion.w() = 1.0;
+  return quaternion;
+}
+
+Eigen::Matrix3f PoseEstimator::getRotationMatrix()
+{
+  Eigen::Matrix3f matrix = Eigen::Matrix3f::Identity();
+  matrix = getQuaternion().toRotationMatrix();
+  return matrix;
+}
+
+Eigen::Matrix4f PoseEstimator::getTransformationMatrix()
+{
+  Eigen::Matrix4f matrix = Eigen::Matrix4f::Identity();
+  matrix.block<3, 3>(0, 0) = getQuaternion().toRotationMatrix();
+  matrix.block<3, 1>(0, 3) = getPose();
+  return matrix;
+}
+
+double PoseEstimator::getFitnessScore()
+{
+  return fitness_score_;
+}
+
+double PoseEstimator::getTransformationProbability()
+{
+  return transformation_probability_;
+}
+
+pcl::PointCloud<PoseEstimator::PointT>::Ptr
+PoseEstimator::getAlignedPoints(const pcl::PointCloud<PointT>::ConstPtr& cloud, const Eigen::Matrix4f& transformation)
+{
+  pcl::PointCloud<PointT>::Ptr aligned(new pcl::PointCloud<PointT>());
+  pcl::transformPointCloud(*cloud, *aligned, transformation);
   return aligned;
 }
 
-/* getters */
-ros::Time PoseEstimator::lastCorrectionTime() const
+void PoseEstimator::setUkfProcessNoise(const Eigen::MatrixXd& process_noise)
 {
-  return last_correction_stamp_;
+  ukf_->setProcessNoiseCovariance(process_noise);
 }
 
-Eigen::Vector3f PoseEstimator::pos() const
+void PoseEstimator::setUkfAlpha(double alpha, double kappa, double beta)
 {
-  return Eigen::Vector3f(ukf_->mean_[0], ukf_->mean_[1], ukf_->mean_[2]);
+  std::vector<double> args = { alpha, kappa, beta };
+  ukf_.reset(new RobotLocalization::Ukf(args));
 }
 
-Eigen::Vector3f PoseEstimator::vel() const
+const boost::optional<Eigen::Matrix4f>& PoseEstimator::getNdtCorrect() const
 {
-  return Eigen::Vector3f(ukf_->mean_[3], ukf_->mean_[4], ukf_->mean_[5]);
+  return ndt_correct_;
 }
 
-Eigen::Quaternionf PoseEstimator::quat() const
+const boost::optional<Eigen::Matrix4f>& PoseEstimator::getNdtTravel() const
 {
-  return Eigen::Quaternionf(ukf_->mean_[6], ukf_->mean_[7], ukf_->mean_[8], ukf_->mean_[9]).normalized();
+  return ndt_travel_;
 }
 
-Eigen::Matrix4f PoseEstimator::matrix() const
+const boost::optional<Eigen::Matrix4f>& PoseEstimator::getUkfTravel() const
 {
-  Eigen::Matrix4f m = Eigen::Matrix4f::Identity();
-  m.block<3, 3>(0, 0) = quat().toRotationMatrix();
-  m.block<3, 1>(0, 3) = pos();
-  return m;
+  return ukf_travel_;
 }
 
-const boost::optional<Eigen::Matrix4f>& PoseEstimator::woPredictionError() const
-{
-  return wo_pred_error_;
-}
-
-const boost::optional<Eigen::Matrix4f>& PoseEstimator::motionPredictionError() const
-{
-  return motion_pred_error_;
-}
 }  // namespace hdl_localization
