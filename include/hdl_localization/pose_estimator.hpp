@@ -78,11 +78,14 @@ public:
   double getFitnessScore();
   double getTransformationProbability();
   bool isAligned();
+  bool isConverged();
   pcl::PointCloud<PointT>::Ptr getAlignedPoints();
+  pcl::PointCloud<PoseEstimator::PointT>::Ptr getTransformedPoints(const pcl::PointCloud<PointT>::ConstPtr& cloud);
 
-  const boost::optional<Eigen::Matrix4f>& getNdtTravel() const;
-  const boost::optional<Eigen::Matrix4f>& getUkfTravel() const;
-  const boost::optional<Eigen::Matrix4f>& getNdtCorrect() const;
+  const boost::optional<Eigen::Matrix4f>& getUkfPredictTrans() const;
+  const boost::optional<Eigen::Matrix4f>& getUkfCorectTrans() const;
+  const boost::optional<Eigen::Matrix4f>& getNdtTrans() const;
+  const boost::optional<Eigen::Matrix4f>& getNdtDiff() const;
 
 private:
   std::unique_ptr<RobotLocalization::Ukf> ukf_;
@@ -97,12 +100,14 @@ private:
   double fitness_score_;
   double transformation_probability_;
   bool aligned_;
+  bool converged_;
   pcl::PointCloud<PointT>::Ptr aligned_points_;
 
   Eigen::Matrix4f last_observation_;
-  boost::optional<Eigen::Matrix4f> ukf_travel_;
-  boost::optional<Eigen::Matrix4f> ndt_correct_;
-  boost::optional<Eigen::Matrix4f> ndt_travel_;
+  boost::optional<Eigen::Matrix4f> ukf_predict_trans_;
+  boost::optional<Eigen::Matrix4f> ukf_correct_trans_;
+  boost::optional<Eigen::Matrix4f> ndt_trans_;
+  boost::optional<Eigen::Matrix4f> ndt_diff_;
 
   pcl::Registration<PointT, PointT>::Ptr registration_;
 };
