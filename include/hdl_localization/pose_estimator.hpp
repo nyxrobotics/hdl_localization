@@ -77,8 +77,8 @@ public:
   Eigen::Matrix4f getTransformationMatrix();
   double getFitnessScore();
   double getTransformationProbability();
-  pcl::PointCloud<PointT>::Ptr getAlignedPoints(const pcl::PointCloud<PointT>::ConstPtr& cloud,
-                                                const Eigen::Matrix4f& transformation);
+  bool isAligned();
+  pcl::PointCloud<PointT>::Ptr getAlignedPoints();
 
   const boost::optional<Eigen::Matrix4f>& getNdtTravel() const;
   const boost::optional<Eigen::Matrix4f>& getUkfTravel() const;
@@ -96,6 +96,8 @@ private:
   Eigen::MatrixXd process_noise_, odom_process_noise_;
   double fitness_score_;
   double transformation_probability_;
+  bool aligned_;
+  pcl::PointCloud<PointT>::Ptr aligned_points_;
 
   Eigen::Matrix4f last_observation_;
   boost::optional<Eigen::Matrix4f> ukf_travel_;

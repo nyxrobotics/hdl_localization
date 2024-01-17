@@ -1,4 +1,5 @@
 #include <nodelet/hdl_localization_nodelet.hpp>
+#include "nodelet/nodelet.h"
 
 namespace hdl_localization
 {
@@ -101,9 +102,10 @@ void HdlLocalizationNodelet::onInit()
   initial_pose.pose.pose.orientation.y = init_orientation_.y();
   initial_pose.pose.pose.orientation.z = init_orientation_.z();
   initial_pose.pose.pose.orientation.w = init_orientation_.w();
+  NODELET_WARN("[HdlLocalizationNodelet::onInit()] Start initialize pose estimator");
   pose_estimator_.reset(
       new hdl_localization::PoseEstimator(registration_, initial_pose, 0.001, 0, 2.0, cool_time_duration_));
-
+  NODELET_WARN("[HdlLocalizationNodelet::onInit()] End initialize pose estimator");
   // Initialize subscriber and publisher
   if (use_imu_)
   {
@@ -342,9 +344,9 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
       {
         break;
       }
-      pose_estimator_->ukfPredict((*imu_iter)->header.stamp);
+      // pose_estimator_->ukfPredict((*imu_iter)->header.stamp);
       motion_measurement = pose_estimator_->imu2UkfMeasurement(**imu_iter);
-      pose_estimator_->ukfCorrect(motion_measurement);
+      // pose_estimator_->ukfCorrect(motion_measurement);
     }
     imu_data_.erase(imu_data_.begin(), imu_iter);
   }
@@ -402,12 +404,12 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
         odom_travel.twist.twist.angular.x = odom_twist_angular.x();
         odom_travel.twist.twist.angular.y = odom_twist_angular.y();
         odom_travel.twist.twist.angular.z = odom_twist_angular.z();
-        odom_travel.twist.covariance[0] = 0.1;
-        odom_travel.twist.covariance[7] = 0.1;
-        odom_travel.twist.covariance[14] = 0.1;
-        odom_travel.twist.covariance[21] = 0.05;
-        odom_travel.twist.covariance[28] = 0.05;
-        odom_travel.twist.covariance[35] = 0.05;
+        odom_travel.twist.covariance[0] = 0.01;
+        odom_travel.twist.covariance[7] = 0.01;
+        odom_travel.twist.covariance[14] = 0.01;
+        odom_travel.twist.covariance[21] = 0.001;
+        odom_travel.twist.covariance[28] = 0.001;
+        odom_travel.twist.covariance[35] = 0.001;
         pose_estimator_->ukfPredict(odom_stamp);
         motion_measurement = pose_estimator_->odom2UkfMeasurement(odom_travel);
         pose_estimator_->ukfCorrect(motion_measurement);
@@ -417,9 +419,14 @@ void HdlLocalizationNodelet::pointsCallback(const sensor_msgs::PointCloud2ConstP
   }
   pose_estimator_->ukfPredict(points_stamp);
   RobotLocalization::Measurement ndt_measurement = pose_estimator_->ndtRegistration(points_stamp, filtered);
+  if (!pose_estimator_->isAligned())
+  {
+    publishOdometry(points_msg->header.stamp, pose_estimator_->getTransformationMatrix(), 1000.0);
+    return;
+  }
   double fitness_score = pose_estimator_->getFitnessScore();
   pose_estimator_->ukfCorrect(ndt_measurement);
-  auto aligned = pose_estimator_->getAlignedPoints(filtered, pose_estimator_->getTransformationMatrix());
+  auto aligned = pose_estimator_->getAlignedPoints();
 
   if (aligned_pub_.getNumSubscribers())
   {
