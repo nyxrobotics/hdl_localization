@@ -47,7 +47,7 @@ public:
   void onInit() override;
 
 private:
-  pcl::Registration<PointT, PointT>::Ptr createRegistration() const;
+  pcl::Registration<PointT, PointT>::Ptr createRegistration();
   void initializeParams();
   void imuCallback(const sensor_msgs::ImuConstPtr& imu_msg);
   void pointsCallback(const sensor_msgs::PointCloud2ConstPtr& points_msg);
@@ -59,12 +59,14 @@ private:
   void publishScanMatchingStatus(const std_msgs::Header& header, pcl::PointCloud<pcl::PointXYZI>::ConstPtr aligned);
   bool getOdomFromTf(nav_msgs::Odometry& odom_out);
   void resetTfBuffer();
+  double getTransformProbability();
 
 private:
   // ROS
   ros::NodeHandle nh_;
   ros::NodeHandle mt_nh_;
   ros::NodeHandle private_nh_;
+  std::string reg_method_;
 
   std::string global_frame_id_;
   std::string odom_frame_id_;

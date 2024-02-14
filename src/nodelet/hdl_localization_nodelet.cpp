@@ -2,7 +2,7 @@
 
 namespace hdl_localization
 {
-HdlLocalizationNodelet::HdlLocalizationNodelet() : tf_buffer_(), tf_listener_(tf_buffer_)
+HdlLocalizationNodelet::HdlLocalizationNodelet() : tf_buffer_(), tf_listener_(tf_buffer_), reg_method_("")
 {
 }
 
@@ -119,14 +119,14 @@ void HdlLocalizationNodelet::onInit()
 }
 
 pcl::Registration<HdlLocalizationNodelet::PointT, HdlLocalizationNodelet::PointT>::Ptr
-HdlLocalizationNodelet::createRegistration() const
+HdlLocalizationNodelet::createRegistration()
 {
-  std::string reg_method = private_nh_.param<std::string>("reg_method", "NDT_OMP");
+  reg_method_ = private_nh_.param<std::string>("reg_method", "NDT_OMP");
   std::string ndt_neighbor_search_method = private_nh_.param<std::string>("ndt_neighbor_search_method", "DIRECT7");
   double ndt_neighbor_search_radius = private_nh_.param<double>("ndt_neighbor_search_radius", 2.0);
   double ndt_resolution = private_nh_.param<double>("ndt_resolution", 1.0);
 
-  if (reg_method == "NDT_OMP")
+  if (reg_method_ == "NDT_OMP")
   {
     NODELET_INFO("NDT_OMP is selected");
     pclomp::NormalDistributionsTransform<HdlLocalizationNodelet::PointT, HdlLocalizationNodelet::PointT>::Ptr ndt(
@@ -158,18 +158,18 @@ HdlLocalizationNodelet::createRegistration() const
     }
     return ndt;
   }
-  else if (reg_method.find("NDT_CUDA") != std::string::npos)
+  else if (reg_method_.find("NDT_CUDA") != std::string::npos)
   {
     NODELET_INFO("NDT_CUDA is selected");
     boost::shared_ptr<fast_gicp::NDTCuda<HdlLocalizationNodelet::PointT, HdlLocalizationNodelet::PointT>> ndt(
         new fast_gicp::NDTCuda<HdlLocalizationNodelet::PointT, HdlLocalizationNodelet::PointT>);
     ndt->setResolution(ndt_resolution);
 
-    if (reg_method.find("D2D") != std::string::npos)
+    if (reg_method_.find("D2D") != std::string::npos)
     {
       ndt->setDistanceMode(fast_gicp::NDTDistanceMode::D2D);
     }
-    else if (reg_method.find("P2D") != std::string::npos)
+    else if (reg_method_.find("P2D") != std::string::npos)
     {
       ndt->setDistanceMode(fast_gicp::NDTDistanceMode::P2D);
     }
@@ -196,7 +196,7 @@ HdlLocalizationNodelet::createRegistration() const
     return ndt;
   }
 
-  NODELET_ERROR_STREAM("unknown registration method:" << reg_method);
+  NODELET_ERROR_STREAM("unknown registration method:" << reg_method_);
   return nullptr;
 }
 
@@ -746,6 +746,28 @@ void HdlLocalizationNodelet::resetTfBuffer()
 {
   tf_buffer_.clear();
   odom_stamp_last_ = ros::Time(0);
+}
+
+double HdlLocalizationNodelet::getTransformProbability()
+{
+  if (reg_method_ == "NDT_OMP")
+  {
+    // Dynamic cast registration to pclomp::NormalDistributionsTransform
+    pclomp::NormalDistributionsTransform<HdlLocalizationNodelet::PointT, HdlLocalizationNodelet::PointT>::Ptr ndt =
+        boost::dynamic_pointer_cast<
+            pclomp::NormalDistributionsTransform<HdlLocalizationNodelet::PointT, HdlLocalizationNodelet::PointT>>(
+            registration_);
+    return ndt->getTransformationProbability();
+  }
+  else if (reg_method_.find("NDT_CUDA") != std::string::npos)
+  {
+    // Dynamic cast registration to fast_gicp::NDTCuda
+    fast_gicp::NDTCuda<HdlLocalizationNodelet::PointT, HdlLocalizationNodelet::PointT>::Ptr ndt =
+        boost::dynamic_pointer_cast<fast_gicp::NDTCuda<HdlLocalizationNodelet::PointT, HdlLocalizationNodelet::PointT>>(
+            registration_);
+    return ndt->getFitnessScore();
+  }
+  return 0;
 }
 
 }  // namespace hdl_localization
